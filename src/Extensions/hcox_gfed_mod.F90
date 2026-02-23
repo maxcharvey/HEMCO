@@ -147,7 +147,9 @@ MODULE HCOX_GFED_MOD
    REAL(sp)                       :: BCPIfrac
    REAL(sp)                       :: POG1frac
    REAL(sp)                       :: SOAPfrac
-
+   REAL(sp)                       :: FSOASfrac ! BrC: OC to FSOAS (mch 23/02/26)
+   REAL(sp)                       :: DBRCPOAfrac ! BrC: OC to DBRCPOA (mch 23/02/26)
+   
    !=================================================================
    ! DATA ARRAY POINTERS
    !
@@ -396,9 +398,11 @@ CONTAINS
 
        SELECT CASE ( Inst%SpcNames(N) )
           CASE ( 'OCPI' )
-             SpcArr = SpcArr * Inst%OCPIfrac
+             SpcArr = SpcArr * Inst%OCPIfrac                   &
+                             * (1.0_sp - Inst%DBRCPOAfrac)    
           CASE ( 'OCPO' )
-             SpcArr = SpcArr * (1.0_sp - Inst%OCPIfrac)
+             SpcArr = SpcArr * (1.0_sp - Inst%OCPIfrac)        &
+                             * (1.0_sp - Inst%DBRCPOAfrac)
           CASE ( 'BCPI' )
              SpcArr = SpcArr * Inst%BCPIfrac
           CASE ( 'BCPO' )
@@ -409,6 +413,11 @@ CONTAINS
              SpcArr = SpcArr * (1.0_sp - Inst%POG1frac)
           CASE ( 'SOAP' )
              SpcArr = SpcArr * Inst%SOAPfrac
+          CASE ( 'FSOAS' )                               ! BrC (mch)
+             SpcArr = SpcArr * Inst%FSOASfrac
+          CASE ( 'DBRCPOA' )                             ! BrC (mch)
+             SpcArr = SpcArr * Inst%DBRCPOAfrac
+
 !==============================================================================
 ! This code is required for partitioning NOx emissions directly to PAN and HNO3.
 ! We will keep it here as an option for users focusing on North American fires.
@@ -690,13 +699,44 @@ CONTAINS
        Inst%SOAPfrac = ValSp
     ENDIF
 
+    
+    ! Try to read OC to FSOAS fraction. Defaults to 0.0 (mch)
+    CALL GetExtOpt( HcoState%Config, ExtNr, 'OC to FSOAS',                  &
+                     OptValSp=ValSp, FOUND=FOUND, RC=RC )
+    IF ( RC /= HCO_SUCCESS ) THEN
+        CALL HCO_ERROR( 'ERROR 14b', RC, THISLOC=LOC )
+        RETURN
+    ENDIF
+    IF ( .NOT. FOUND ) THEN
+       Inst%FSOASfrac = 0.0
+    ELSE
+       Inst%FSOASfrac = ValSp
+    ENDIF
+
+    ! Try to read OC to DBRCPOA fraction. Defaults to 0.0 (mch)
+    CALL GetExtOpt( HcoState%Config, ExtNr, 'OC to DBRCPOA',                &
+                     OptValSp=ValSp, FOUND=FOUND, RC=RC )
+    IF ( RC /= HCO_SUCCESS ) THEN
+        CALL HCO_ERROR( 'ERROR 14c', RC, THISLOC=LOC )
+        RETURN
+    ENDIF
+    IF ( .NOT. FOUND ) THEN
+       Inst%DBRCPOAfrac = 0.0
+    ELSE
+       Inst%DBRCPOAfrac = ValSp
+    ENDIF
+
+
     ! Error check: OCPIfrac, BCPIfrac, and POG1frac must be between 0 and 1
     IF ( Inst%OCPIfrac < 0.0_sp .OR. Inst%OCPIfrac > 1.0_sp .OR. &
          Inst%BCPIfrac < 0.0_sp .OR. Inst%BCPIfrac > 1.0_sp .OR. &
          Inst%SOAPfrac < 0.0_sp .OR. Inst%SOAPfrac > 1.0_sp .OR. &
+         Inst%FSOASfrac   < 0.0_sp .OR. Inst%FSOASfrac   > 1.0_sp .OR. &
+         Inst%DBRCPOAfrac < 0.0_sp .OR. Inst%DBRCPOAfrac > 1.0_sp .OR. &
          Inst%POG1frac < 0.0_sp .OR. Inst%POG1frac > 1.0_sp     ) THEN
        WRITE(MSG,*) 'fractions must be between 0-1: ', &
-          Inst%OCPIfrac, Inst%BCPIfrac, Inst%POG1frac, Inst%SOAPfrac
+          Inst%OCPIfrac, Inst%BCPIfrac, Inst%POG1frac, Inst%SOAPfrac,    &
+          Inst%FSOASfrac, Inst%DBRCPOAfrac
        CALL HCO_ERROR(MSG, RC )
        RETURN
     ENDIF
@@ -785,6 +825,11 @@ CONTAINS
        CALL HCO_MSG(MSG, LUN=HcoState%Config%hcoLogLUN )
        WRITE(MSG,*) '   - SOAP fraction           : ', Inst%SOAPfrac
        CALL HCO_MSG(MSG, LUN=HcoState%Config%hcoLogLUN )
+       WRITE(MSG,*) '   - FSOAS fraction          : ', Inst%FSOASfrac
+       CALL HCO_MSG(MSG, LUN=HcoState%Config%hcoLogLUN )
+       WRITE(MSG,*) '   - DBRCPOA fraction        : ', Inst%DBRCPOAfrac
+       CALL HCO_MSG(MSG, LUN=HcoState%Config%hcoLogLUN )
+
     ENDIF
 
     ! Get HEMCO species IDs of all species specified in configuration file
@@ -900,6 +945,9 @@ CONTAINS
        IF ( TRIM(SpcName) == 'POG1' ) SpcName = 'OC'
        IF ( TRIM(SpcName) == 'POG2' ) SpcName = 'OC'
        IF ( TRIM(SpcName) == 'NAP'  ) SpcName = 'CO'
+       IF ( TRIM(SpcName) == 'FSOAS'   ) SpcName = 'OC'   ! BrC (mch)
+       IF ( TRIM(SpcName) == 'DBRCPOA' ) SpcName = 'OC'   ! BrC (mch)
+       
 !==============================================================================
 ! This code is required for partitioning NOx emissions directly to PAN and HNO3.
 ! We will keep it here as an option for users focusing on North American fires.
