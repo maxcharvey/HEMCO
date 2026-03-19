@@ -74,7 +74,7 @@ MODULE HCOX_GFED_MOD
 !       Mu, M., Kasibhatla, P. S., Morton, D. C., DeFries, R. S., Jin, Y.,
 !       and van Leeuwen, T. T.: Global fire emissions and the contribution of
 !       deforestation, savanna, forest, agricultural, and peat fires
-!       (1997â~@~S2009), Atmos. Chem. Phys., 10, 11707-11735,
+!       (1997ï¿½~@~S2009), Atmos. Chem. Phys., 10, 11707-11735,
 !       doi:10.5194/acp-10-11707-2010, 2010.
 !
 ! !REVISION HISTORY:
@@ -147,9 +147,10 @@ MODULE HCOX_GFED_MOD
    REAL(sp)                       :: BCPIfrac
    REAL(sp)                       :: POG1frac
    REAL(sp)                       :: SOAPfrac
-   REAL(sp)                       :: FSOASfrac ! BrC: OC to FSOAS (mch 23/02/26)
-   REAL(sp)                       :: DBRCPOAfrac ! BrC: OC to DBRCPOA (mch 23/02/26)
-   
+   REAL(sp)                       :: FSOAPfrac ! BrC: CO to FSOAP (mch 25/02/26)
+   REAL(sp)                       :: DBRCPOAfrac ! BrC: BC to DBRCPOA scale factor (mch 19/03/26)
+   REAL(sp)                       :: NPBRCPOAfrac ! BrC: OC to NPBRCPOA (mch 25/02/26)
+
    !=================================================================
    ! DATA ARRAY POINTERS
    !
@@ -399,10 +400,10 @@ CONTAINS
        SELECT CASE ( Inst%SpcNames(N) )
           CASE ( 'OCPI' )
              SpcArr = SpcArr * Inst%OCPIfrac                   &
-                             * (1.0_sp - Inst%DBRCPOAfrac)    
+                             * (1.0_sp - Inst%NPBRCPOAfrac)
           CASE ( 'OCPO' )
              SpcArr = SpcArr * (1.0_sp - Inst%OCPIfrac)        &
-                             * (1.0_sp - Inst%DBRCPOAfrac)
+                             * (1.0_sp - Inst%NPBRCPOAfrac) 
           CASE ( 'BCPI' )
              SpcArr = SpcArr * Inst%BCPIfrac
           CASE ( 'BCPO' )
@@ -413,11 +414,12 @@ CONTAINS
              SpcArr = SpcArr * (1.0_sp - Inst%POG1frac)
           CASE ( 'SOAP' )
              SpcArr = SpcArr * Inst%SOAPfrac
-          CASE ( 'FSOAS' )                               ! BrC (mch)
-             SpcArr = SpcArr * Inst%FSOASfrac
+          CASE ( 'FSOAP' )                               ! BrC (mch)
+             SpcArr = SpcArr * Inst%FSOAPfrac
           CASE ( 'DBRCPOA' )                             ! BrC (mch)
              SpcArr = SpcArr * Inst%DBRCPOAfrac
-
+          CASE ( 'NPBRCPOA')                             ! BrC (mch)
+             SpcArr = SpcArr * Inst%NPBRCPOAfrac         
 !==============================================================================
 ! This code is required for partitioning NOx emissions directly to PAN and HNO3.
 ! We will keep it here as an option for users focusing on North American fires.
@@ -700,21 +702,23 @@ CONTAINS
     ENDIF
 
     
-    ! Try to read OC to FSOAS fraction. Defaults to 0.0 (mch)
-    CALL GetExtOpt( HcoState%Config, ExtNr, 'OC to FSOAS',                  &
+    ! Try to read CO to FSOAP fraction. Defaults to 0.0 (mch)
+    CALL GetExtOpt( HcoState%Config, ExtNr, 'CO to FSOAP', &
                      OptValSp=ValSp, FOUND=FOUND, RC=RC )
     IF ( RC /= HCO_SUCCESS ) THEN
         CALL HCO_ERROR( 'ERROR 14b', RC, THISLOC=LOC )
         RETURN
     ENDIF
     IF ( .NOT. FOUND ) THEN
-       Inst%FSOASfrac = 0.0
+       Inst%FSOAPfrac = 0.0
     ELSE
-       Inst%FSOASfrac = ValSp
+       Inst%FSOAPfrac = ValSp
     ENDIF
 
-    ! Try to read OC to DBRCPOA fraction. Defaults to 0.0 (mch)
-    CALL GetExtOpt( HcoState%Config, ExtNr, 'OC to DBRCPOA',                &
+    ! Try to read BC to DBRCPOA scaling factor. Defaults to 0.0 (mch)
+    ! DBRCPOA emissions = DBRCPOAfrac * BB BC carbon mass
+    ! Set to 4.0 in HEMCO config for 4x BC scaling
+    CALL GetExtOpt( HcoState%Config, ExtNr, 'BC to DBRCPOA',                &
                      OptValSp=ValSp, FOUND=FOUND, RC=RC )
     IF ( RC /= HCO_SUCCESS ) THEN
         CALL HCO_ERROR( 'ERROR 14c', RC, THISLOC=LOC )
@@ -726,17 +730,33 @@ CONTAINS
        Inst%DBRCPOAfrac = ValSp
     ENDIF
 
+    ! Try to read OC to NPBRCPOA fraction. Defaults to 0.0 (mch)
+    CALL GetExtOpt( HcoState%Config, ExtNr, 'OC to NPBRCPOA',                &
+                     OptValSp=ValSp, FOUND=FOUND, RC=RC )
+    IF ( RC /= HCO_SUCCESS ) THEN
+        CALL HCO_ERROR( 'ERROR 14c', RC, THISLOC=LOC )
+        RETURN
+    ENDIF
+    IF ( .NOT. FOUND ) THEN
+       Inst%NPBRCPOAfrac = 0.0
+    ELSE
+       Inst%NPBRCPOAfrac = ValSp
+    ENDIF
+
 
     ! Error check: OCPIfrac, BCPIfrac, and POG1frac must be between 0 and 1
+    ! Note: DBRCPOAfrac is a scaling factor (e.g. 4.0), not a fraction,
+    ! so only its lower bound is checked.
     IF ( Inst%OCPIfrac < 0.0_sp .OR. Inst%OCPIfrac > 1.0_sp .OR. &
          Inst%BCPIfrac < 0.0_sp .OR. Inst%BCPIfrac > 1.0_sp .OR. &
          Inst%SOAPfrac < 0.0_sp .OR. Inst%SOAPfrac > 1.0_sp .OR. &
-         Inst%FSOASfrac   < 0.0_sp .OR. Inst%FSOASfrac   > 1.0_sp .OR. &
-         Inst%DBRCPOAfrac < 0.0_sp .OR. Inst%DBRCPOAfrac > 1.0_sp .OR. &
+         Inst%FSOAPfrac   < 0.0_sp .OR. Inst%FSOAPfrac   > 1.0_sp .OR. &
+         Inst%NPBRCPOAfrac < 0.0_sp .OR. Inst%NPBRCPOAfrac > 1.0_sp .OR. &
+         Inst%DBRCPOAfrac < 0.0_sp .OR.                                   &
          Inst%POG1frac < 0.0_sp .OR. Inst%POG1frac > 1.0_sp     ) THEN
        WRITE(MSG,*) 'fractions must be between 0-1: ', &
           Inst%OCPIfrac, Inst%BCPIfrac, Inst%POG1frac, Inst%SOAPfrac,    &
-          Inst%FSOASfrac, Inst%DBRCPOAfrac
+          Inst%FSOAPfrac, Inst%DBRCPOAfrac, Inst%NPBRCPOAfrac
        CALL HCO_ERROR(MSG, RC )
        RETURN
     ENDIF
@@ -825,12 +845,15 @@ CONTAINS
        CALL HCO_MSG(MSG, LUN=HcoState%Config%hcoLogLUN )
        WRITE(MSG,*) '   - SOAP fraction           : ', Inst%SOAPfrac
        CALL HCO_MSG(MSG, LUN=HcoState%Config%hcoLogLUN )
-       WRITE(MSG,*) '   - FSOAS fraction          : ', Inst%FSOASfrac
+       WRITE(MSG,*) '   - FSOAP fraction          : ', Inst%FSOAPfrac
        CALL HCO_MSG(MSG, LUN=HcoState%Config%hcoLogLUN )
-       WRITE(MSG,*) '   - DBRCPOA fraction        : ', Inst%DBRCPOAfrac
+       WRITE(MSG,*) '   - DBRCPOA BC scale factor : ', Inst%DBRCPOAfrac
        CALL HCO_MSG(MSG, LUN=HcoState%Config%hcoLogLUN )
-
+       WRITE(MSG,*) '   - NPBRCPOA fraction        : ', Inst%NPBRCPOAfrac
+       CALL HCO_MSG(MSG, LUN=HcoState%Config%hcoLogLUN )
+    
     ENDIF
+
 
     ! Get HEMCO species IDs of all species specified in configuration file
     CALL HCO_GetExtHcoID( HcoState, Inst%ExtNr, HcoIDs, SpcNames, Inst%nSpc, RC )
@@ -945,9 +968,10 @@ CONTAINS
        IF ( TRIM(SpcName) == 'POG1' ) SpcName = 'OC'
        IF ( TRIM(SpcName) == 'POG2' ) SpcName = 'OC'
        IF ( TRIM(SpcName) == 'NAP'  ) SpcName = 'CO'
-       IF ( TRIM(SpcName) == 'FSOAS'   ) SpcName = 'OC'   ! BrC (mch)
-       IF ( TRIM(SpcName) == 'DBRCPOA' ) SpcName = 'OC'   ! BrC (mch)
-       
+       IF ( TRIM(SpcName) == 'FSOAP'   ) SpcName = 'CO'   ! BrC (mch)
+       IF ( TRIM(SpcName) == 'DBRCPOA' ) SpcName = 'BC'   ! BrC: scale from BC (mch)
+       IF ( TRIM(SpcName) == 'NPBRCPOA' ) SpcName = 'OC'   ! BrC (mch)
+
 !==============================================================================
 ! This code is required for partitioning NOx emissions directly to PAN and HNO3.
 ! We will keep it here as an option for users focusing on North American fires.
