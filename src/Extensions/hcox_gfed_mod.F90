@@ -221,7 +221,7 @@ CONTAINS
 
     TYPE(MyInst), POINTER :: Inst
 
-    INTEGER, PARAMETER  :: HIGH_INJECT_LEVEL = 40  ! inject 100% here (~150 hPa, 47L)
+    INTEGER, PARAMETER  :: HIGH_INJECT_LEVEL = 25  ! inject 100% here (~150 hPa, 47L)
     INTEGER             :: I, J
     REAL(hp), TARGET    :: SpcArr3D(HcoState%NX,HcoState%NY,HcoState%NZ)
 
