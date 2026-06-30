@@ -150,6 +150,7 @@ MODULE HCOX_GFED_MOD
    REAL(sp)                       :: FSOAPfrac ! BrC: CO to FSOAP (mch 25/02/26)
    REAL(sp)                       :: DBRCPOAfrac ! BrC: BC to DBRCPOA scale factor (mch 19/03/26)
    REAL(sp)                       :: NPBRCPOAfrac ! BrC: OC to NPBRCPOA (mch 25/02/26)
+   REAL(sp)                       :: PBRCPOAfrac ! BrC: persistent fraction of NPBRCPOA
 
    !=================================================================
    ! DATA ARRAY POINTERS
@@ -419,7 +420,11 @@ CONTAINS
           CASE ( 'DBRCPOA' )                             ! BrC (mch)
              SpcArr = SpcArr * Inst%DBRCPOAfrac
           CASE ( 'NPBRCPOA')                             ! BrC (mch)
-             SpcArr = SpcArr * Inst%NPBRCPOAfrac         
+             SpcArr = SpcArr * Inst%NPBRCPOAfrac         &
+                             * (1.0_sp - Inst%PBRCPOAfrac)
+          CASE ( 'PBRCPOA')                              ! BrC (mch)
+             SpcArr = SpcArr * Inst%NPBRCPOAfrac         &
+                             * Inst%PBRCPOAfrac
 !==============================================================================
 ! This code is required for partitioning NOx emissions directly to PAN and HNO3.
 ! We will keep it here as an option for users focusing on North American fires.
@@ -743,6 +748,20 @@ CONTAINS
        Inst%NPBRCPOAfrac = ValSp
     ENDIF
 
+    ! Try to read persistent NPBRCPOA fraction. Defaults to 0.25.
+    CALL GetExtOpt( HcoState%Config, ExtNr,                              &
+                    'NPBRCPOA persistent fraction',                       &
+                     OptValSp=ValSp, FOUND=FOUND, RC=RC )
+    IF ( RC /= HCO_SUCCESS ) THEN
+        CALL HCO_ERROR( 'ERROR 14d', RC, THISLOC=LOC )
+        RETURN
+    ENDIF
+    IF ( .NOT. FOUND ) THEN
+       Inst%PBRCPOAfrac = 0.25
+    ELSE
+       Inst%PBRCPOAfrac = ValSp
+    ENDIF
+
 
     ! Error check: OCPIfrac, BCPIfrac, and POG1frac must be between 0 and 1
     ! Note: DBRCPOAfrac is a scaling factor (e.g. 4.0), not a fraction,
@@ -752,11 +771,13 @@ CONTAINS
          Inst%SOAPfrac < 0.0_sp .OR. Inst%SOAPfrac > 1.0_sp .OR. &
          Inst%FSOAPfrac   < 0.0_sp .OR. Inst%FSOAPfrac   > 1.0_sp .OR. &
          Inst%NPBRCPOAfrac < 0.0_sp .OR. Inst%NPBRCPOAfrac > 1.0_sp .OR. &
+         Inst%PBRCPOAfrac < 0.0_sp .OR. Inst%PBRCPOAfrac > 1.0_sp .OR. &
          Inst%DBRCPOAfrac < 0.0_sp .OR.                                   &
          Inst%POG1frac < 0.0_sp .OR. Inst%POG1frac > 1.0_sp     ) THEN
        WRITE(MSG,*) 'fractions must be between 0-1: ', &
           Inst%OCPIfrac, Inst%BCPIfrac, Inst%POG1frac, Inst%SOAPfrac,    &
-          Inst%FSOAPfrac, Inst%DBRCPOAfrac, Inst%NPBRCPOAfrac
+          Inst%FSOAPfrac, Inst%DBRCPOAfrac, Inst%NPBRCPOAfrac,           &
+          Inst%PBRCPOAfrac
        CALL HCO_ERROR(MSG, RC )
        RETURN
     ENDIF
@@ -850,6 +871,8 @@ CONTAINS
        WRITE(MSG,*) '   - DBRCPOA BC scale factor : ', Inst%DBRCPOAfrac
        CALL HCO_MSG(MSG, LUN=HcoState%Config%hcoLogLUN )
        WRITE(MSG,*) '   - NPBRCPOA fraction        : ', Inst%NPBRCPOAfrac
+       CALL HCO_MSG(MSG, LUN=HcoState%Config%hcoLogLUN )
+       WRITE(MSG,*) '   - PBRCPOA persistent frac  : ', Inst%PBRCPOAfrac
        CALL HCO_MSG(MSG, LUN=HcoState%Config%hcoLogLUN )
     
     ENDIF
@@ -971,6 +994,7 @@ CONTAINS
        IF ( TRIM(SpcName) == 'FSOAP'   ) SpcName = 'CO'   ! BrC (mch)
        IF ( TRIM(SpcName) == 'DBRCPOA' ) SpcName = 'BC'   ! BrC: scale from BC (mch)
        IF ( TRIM(SpcName) == 'NPBRCPOA' ) SpcName = 'OC'   ! BrC (mch)
+       IF ( TRIM(SpcName) == 'PBRCPOA'  ) SpcName = 'OC'   ! BrC (mch)
 
 !==============================================================================
 ! This code is required for partitioning NOx emissions directly to PAN and HNO3.
