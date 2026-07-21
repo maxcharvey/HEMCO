@@ -79,6 +79,7 @@ MODULE HCOX_GFED_MOD
 !
 ! !REVISION HISTORY:
 !  07 Sep 2011 - P. Kasibhatla - Initial version, based on GFED2
+!  21 Jul 2026 - M. Harvey - Gate BrC GFED partitioning on GEOS-Chem setting
 !  See https://github.com/geoschem/hemco for complete history
 !EOP
 !------------------------------------------------------------------------------
@@ -151,6 +152,7 @@ MODULE HCOX_GFED_MOD
    REAL(sp)                       :: DBRCPOAfrac ! BrC: BC to DBRCPOA scale factor (mch 19/03/26)
    REAL(sp)                       :: NPBRCPOAfrac ! BrC: OC to NPBRCPOA (mch 25/02/26)
    REAL(sp)                       :: PBRCPOAfrac ! BrC: persistent fraction of NPBRCPOA
+   LOGICAL                        :: UseBrC
 
    !=================================================================
    ! DATA ARRAY POINTERS
@@ -332,6 +334,15 @@ CONTAINS
        IF ( Inst%HcoIDs(N)  < 0 ) CYCLE
        IF ( Inst%GfedIDs(N) < 0 ) CYCLE
 
+       ! Skip branch-specific BrC emissions when disabled.  OCPI and OCPO
+       ! retain their main-branch GFED partitioning in the SELECT CASE below.
+       IF ( .NOT. Inst%UseBrC ) THEN
+          SELECT CASE ( Inst%SpcNames(N) )
+             CASE ( 'FSOAP', 'DBRCPOA', 'NPBRCPOA', 'PBRCPOA' )
+                CYCLE
+          END SELECT
+       ENDIF
+
        ! SpcArr are the total biomass burning emissions for this
        ! species. TypArr are the emissions from a given source type.
        SpcArr   = 0.0_hp
@@ -400,11 +411,15 @@ CONTAINS
 
        SELECT CASE ( Inst%SpcNames(N) )
           CASE ( 'OCPI' )
-             SpcArr = SpcArr * Inst%OCPIfrac                   &
-                             * (1.0_sp - Inst%NPBRCPOAfrac)
+             SpcArr = SpcArr * Inst%OCPIfrac
+             IF ( Inst%UseBrC ) THEN
+                SpcArr = SpcArr * (1.0_sp - Inst%NPBRCPOAfrac)
+             ENDIF
           CASE ( 'OCPO' )
-             SpcArr = SpcArr * (1.0_sp - Inst%OCPIfrac)        &
-                             * (1.0_sp - Inst%NPBRCPOAfrac) 
+             SpcArr = SpcArr * (1.0_sp - Inst%OCPIfrac)
+             IF ( Inst%UseBrC ) THEN
+                SpcArr = SpcArr * (1.0_sp - Inst%NPBRCPOAfrac)
+             ENDIF
           CASE ( 'BCPI' )
              SpcArr = SpcArr * Inst%BCPIfrac
           CASE ( 'BCPO' )
@@ -641,6 +656,16 @@ CONTAINS
        RETURN
     ENDIF
 
+    ! GEOS-Chem injects this option from aerosols%carbon%brown_carbon.
+    ! Default to false so standalone HEMCO keeps its pre-BrC behavior.
+    CALL GetExtOpt( HcoState%Config, Inst%ExtNr, 'GEOSCHEM_BROWN_CARBON', &
+                     OptValBool=Inst%UseBrC, FOUND=FOUND, RC=RC )
+    IF ( RC /= HCO_SUCCESS ) THEN
+       CALL HCO_ERROR( 'ERROR 10b', RC, THISLOC=LOC )
+       RETURN
+    ENDIF
+    IF ( .NOT. FOUND ) Inst%UseBrC = .FALSE.
+
     ! ----------------------------------------------------------------------
     ! Get settings
     ! The speciation of carbon aerosols into hydrophilic and hydrophobic
@@ -873,6 +898,8 @@ CONTAINS
        WRITE(MSG,*) '   - NPBRCPOA fraction        : ', Inst%NPBRCPOAfrac
        CALL HCO_MSG(MSG, LUN=HcoState%Config%hcoLogLUN )
        WRITE(MSG,*) '   - PBRCPOA persistent frac  : ', Inst%PBRCPOAfrac
+       CALL HCO_MSG(MSG, LUN=HcoState%Config%hcoLogLUN )
+       WRITE(MSG,*) '   - Brown carbon enabled     : ', Inst%UseBrC
        CALL HCO_MSG(MSG, LUN=HcoState%Config%hcoLogLUN )
     
     ENDIF
