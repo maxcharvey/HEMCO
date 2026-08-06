@@ -17,6 +17,7 @@ MODULE HCOX_GFED_MOD
   USE HCO_ERROR_MOD
   USE HCO_DIAGN_MOD
   USE HCOX_TOOLS_MOD
+  USE HCOX_GFED_SCALING_MOD, ONLY : CONFIGURE_GFED_CO_RATIOS
   USE HCO_STATE_MOD,  ONLY : HCO_State
   USE HCOX_State_MOD, ONLY : Ext_State
 
@@ -79,6 +80,7 @@ MODULE HCOX_GFED_MOD
 !
 ! !REVISION HISTORY:
 !  07 Sep 2011 - P. Kasibhatla - Initial version, based on GFED2
+!  06 Aug 2026 - M. Harvey - Make SOAP/FSOAP ratios inherit CO scaling
 !  06 Aug 2026 - M. Harvey - Add runtime GFED vertical-injection controls
 !  21 Jul 2026 - M. Harvey - Gate BrC GFED partitioning on GEOS-Chem setting
 !  See https://github.com/geoschem/hemco for complete history
@@ -970,6 +972,17 @@ CONTAINS
     Inst%SpcScalFldNme = SpcScalFldNme
     DEALLOCATE(SpcScal,SpcScalFldNme)
 
+    ! SOAP and FSOAP are specified as final emitted ratios to GFED CO.
+    ! Inherit CO scaling once, before any source-species remapping, so NAP and
+    ! species-list ordering cannot modify either ratio.
+    CALL CONFIGURE_GFED_CO_RATIOS( Inst%SpcNames, Inst%SOAPfrac,            &
+                                   Inst%FSOAPfrac, Inst%SpcScal,            &
+                                   Inst%SpcScalFldNme, HCOX_NOSCALE, MSG )
+    IF ( LEN_TRIM(MSG) > 0 ) THEN
+       CALL HCO_ERROR( TRIM(MSG), RC )
+       RETURN
+    ENDIF
+
     ! Error trap: in previous versions, CO, POA and NAP scale factor were given as
     ! 'CO scale factor', etc. Make sure those attributes do not exist any more!
     CALL GetExtOpt( HcoState%Config, Inst%ExtNr, 'CO scale factor', &
@@ -1044,6 +1057,7 @@ CONTAINS
        IF ( TRIM(SpcName) == 'POG1' ) SpcName = 'OC'
        IF ( TRIM(SpcName) == 'POG2' ) SpcName = 'OC'
        IF ( TRIM(SpcName) == 'NAP'  ) SpcName = 'CO'
+       IF ( TRIM(SpcName) == 'SOAP' ) SpcName = 'CO'
        IF ( TRIM(SpcName) == 'FSOAP'   ) SpcName = 'CO'   ! BrC (mch)
        IF ( TRIM(SpcName) == 'DBRCPOA' ) SpcName = 'BC'   ! BrC: scale from BC (mch)
        IF ( TRIM(SpcName) == 'NPBRCPOA' ) SpcName = 'OC'   ! BrC (mch)
@@ -1056,11 +1070,6 @@ CONTAINS
 !       IF ( TRIM(SpcName) == 'PAN'  ) SpcName = 'NO'
 !       IF ( TRIM(SpcName) == 'HNO3' ) SpcName = 'NO'
 !==============================================================================
-
-       ! adjust SOAP scale factor by CO scale factor (SOAP co-emitted with CO)
-       IF ( TRIM(SpcName) == 'CO' ) THEN
-         Inst%SOAPfrac = Inst%SOAPfrac * Inst%SpcScal(N)
-       END IF
 
        ! Search for matching GFED species by name
        Matched = .FALSE.

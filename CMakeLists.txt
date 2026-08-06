@@ -4,6 +4,10 @@ cmake_minimum_required(VERSION 3.5)
 project(HEMCO VERSION 3.12.0 LANGUAGES Fortran)
 # Reminder: Make sure to also update version in src/Core/hco_error_mod.F90
 
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    include(CTest)
+endif()
+
 #-----------------------------------------------------------------------------
 # Add CMakeScripts/ to the module path
 #-----------------------------------------------------------------------------
@@ -451,3 +455,7 @@ endif()
 # Add source code directory
 #-----------------------------------------------------------------------------
 add_subdirectory(src)
+
+if(BUILD_TESTING AND NOT HEMCO_EXTERNAL_CONFIG)
+    add_subdirectory(test)
+endif()
