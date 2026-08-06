@@ -5,6 +5,7 @@ file(READ "${SCALING_FILE}" SCALING_SOURCE)
 set(REQUIRED_GFED_TEXT
     "CALL CONFIGURE_GFED_CO_RATIOS("
     "IF ( TRIM(SpcName) == 'SOAP' ) SpcName = 'CO'"
+    "IF ( TRIM(SpcName) == 'FSOAP'   ) SpcName = 'CO'"
 )
 foreach(TEXT IN LISTS REQUIRED_GFED_TEXT)
     string(FIND "${GFED_SOURCE}" "${TEXT}" POSITION)
