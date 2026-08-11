@@ -79,6 +79,7 @@ MODULE HCOX_GFED_MOD
 !
 ! !REVISION HISTORY:
 !  07 Sep 2011 - P. Kasibhatla - Initial version, based on GFED2
+!  12 Aug 2026 - M. Harvey - Add 15-level injection sensitivity
 !  See https://github.com/geoschem/hemco for complete history
 !EOP
 !------------------------------------------------------------------------------
