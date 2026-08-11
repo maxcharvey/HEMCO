@@ -468,12 +468,12 @@ CONTAINS
              ENDDO
 
              ! Total thickness of the free troposphere [hPa]
-             ! (10 levels above PBL, capped at model top)
+             ! (15 levels above PBL, capped at model top)
              TOTPRESFT = HcoState%Grid%PEDGE%Val(I,J,PBL_MAX+1) - &
-                         HcoState%Grid%PEDGE%Val(I,J,MIN(PBL_MAX+10,HcoState%NZ)+1)
+                         HcoState%Grid%PEDGE%Val(I,J,MIN(PBL_MAX+15,HcoState%NZ)+1)
 
              ! Loop over the free troposphere
-             DO L = PBL_MAX+1, MIN(PBL_MAX+10, HcoState%NZ)
+             DO L = PBL_MAX+1, MIN(PBL_MAX+15, HcoState%NZ)
 
                 ! Thickness of level L [hPa]
                 DELTPRES = HcoState%Grid%PEDGE%Val(I,J,L) - &
@@ -483,7 +483,7 @@ CONTAINS
                 F_OF_FT = DELTPRES / TOTPRESFT
 
                 ! Add 35% of biomass burning source to free troposphere
-                ! Distribute emissions thru 10 model levels above the BL
+                ! Distribute emissions thru 15 model levels above the BL
                 ! (mps from evf+tjb, 3/10/17)
                 SpcArr3D(I,J,L) = SpcArr(I,J) * (1.0_hp - PBL_FRAC) * F_OF_FT
 
