@@ -210,6 +210,7 @@ CONTAINS
     USE HCO_Calc_Mod,     ONLY : HCO_EvalFld
     USE HCO_EmisList_Mod, ONLY : HCO_GetPtr
     USE HCO_FluxArr_MOD,  ONLY : HCO_EmisAdd
+    USE HCOX_FIRE_INJECTION_MOD, ONLY : HCOX_FireInject_Apply
 !
 ! !INPUT/OUTPUT PARAMETERS:
 !
@@ -227,11 +228,8 @@ CONTAINS
 ! !LOCAL VARIABLES:
 !
     LOGICAL, SAVE       :: FIRST = .TRUE.
-    INTEGER             :: I, J, L, N, M
-    INTEGER             :: PBL_MAX, N_FTLEV
+    INTEGER             :: N, M
     REAL(hp), POINTER   :: TmpPtr(:,:)
-    REAL(hp)            :: F_OF_PBL, F_OF_FT, PBL_SUM
-    REAL(hp)            :: DELTPRES, TOTPRESFT
     CHARACTER(LEN=63)   :: MSG
     CHARACTER(LEN=255)  :: LOC
 
@@ -460,57 +458,11 @@ CONTAINS
        ENDIF
 
        IF ( Inst%VerticalInjectFrac > 0.0_hp ) THEN
-          DO J = 1, HcoState%Ny
-          DO I = 1, HcoState%Nx
-             IF ( SpcArr(I,J) <= 0.0_hp ) CYCLE
-
-             PBL_MAX = 0
-             DO L = HcoState%NZ, 1, -1
-                IF ( ExtState%FRAC_OF_PBL%Arr%Val(I,J,L) > 0.0_hp ) THEN
-                   PBL_MAX = L
-                   EXIT
-                ENDIF
-             ENDDO
-
-             PBL_SUM = 0.0_hp
-             DO L = 1, PBL_MAX
-                PBL_SUM = PBL_SUM + MAX( 0.0_hp,                            &
-                                         ExtState%FRAC_OF_PBL%Arr%Val(I,J,L) )
-             ENDDO
-             IF ( PBL_SUM <= 0.0_hp ) THEN
-                CALL HCO_ERROR( 'GFED vertical injection has invalid PBL fractions', RC )
-                RETURN
-             ENDIF
-
-             N_FTLEV = Inst%VerticalInjectLevels
-             IF ( PBL_MAX + N_FTLEV > HcoState%NZ ) THEN
-                CALL HCO_ERROR( 'GFED vertical injection lacks requested free-troposphere levels', RC )
-                RETURN
-             ENDIF
-
-             DO L = 1, PBL_MAX
-                F_OF_PBL = MAX( 0.0_hp,                                     &
-                                ExtState%FRAC_OF_PBL%Arr%Val(I,J,L) ) / PBL_SUM
-                Inst%SpcArr3D(I,J,L) = SpcArr(I,J) *                         &
-                                        ( 1.0_hp - Inst%VerticalInjectFrac ) * F_OF_PBL
-             ENDDO
-
-             TOTPRESFT = HcoState%Grid%PEDGE%Val(I,J,PBL_MAX+1) -           &
-                         HcoState%Grid%PEDGE%Val(I,J,PBL_MAX+N_FTLEV+1)
-             IF ( TOTPRESFT <= 0.0_hp ) THEN
-                CALL HCO_ERROR( 'GFED vertical injection has nonpositive FT pressure depth', RC )
-                RETURN
-             ENDIF
-
-             DO L = PBL_MAX+1, PBL_MAX+N_FTLEV
-                DELTPRES = HcoState%Grid%PEDGE%Val(I,J,L) -                 &
-                           HcoState%Grid%PEDGE%Val(I,J,L+1)
-                F_OF_FT  = DELTPRES / TOTPRESFT
-                Inst%SpcArr3D(I,J,L) = SpcArr(I,J) *                         &
-                                        Inst%VerticalInjectFrac * F_OF_FT
-             ENDDO
-          ENDDO
-          ENDDO
+          CALL HCOX_FireInject_Apply( HcoState, ExtState, SpcArr,           &
+                                      Inst%VerticalInjectFrac,               &
+                                      Inst%VerticalInjectLevels,             &
+                                      Inst%SpcArr3D, 'GFED', RC )
+          IF ( RC /= HCO_SUCCESS ) RETURN
 
           CALL HCO_EmisAdd( HcoState, Inst%SpcArr3D, Inst%HcoIDs(N),        &
                             RC, ExtNr=Inst%ExtNr )
@@ -557,6 +509,7 @@ CONTAINS
     USE HCO_STATE_MOD,          ONLY : HCO_GetExtHcoID
     USE HCO_ExtList_Mod,        ONLY : GetExtNr, GetExtOpt
     USE HCO_ExtList_Mod,        ONLY : GetExtSpcVal
+    USE HCOX_FIRE_INJECTION_MOD, ONLY : HCOX_FireInject_Validate
 !
 ! !INPUT/OUTPUT PARAMETERS:
 !
@@ -828,21 +781,9 @@ CONTAINS
     ENDIF
     IF ( .NOT. FOUND ) Inst%VerticalInjectLevels = 0
 
-    IF ( Inst%VerticalInjectFrac < 0.0_hp .OR.                            &
-         Inst%VerticalInjectFrac > 1.0_hp ) THEN
-       CALL HCO_ERROR( 'GFED vertical injection fraction must be in [0,1]', RC )
-       RETURN
-    ENDIF
-    IF ( Inst%VerticalInjectFrac == 0.0_hp .AND.                          &
-         Inst%VerticalInjectLevels /= 0 ) THEN
-       CALL HCO_ERROR( 'GFED zero vertical fraction requires zero levels', RC )
-       RETURN
-    ENDIF
-    IF ( Inst%VerticalInjectFrac > 0.0_hp .AND.                           &
-         Inst%VerticalInjectLevels < 1 ) THEN
-       CALL HCO_ERROR( 'GFED positive vertical fraction requires levels', RC )
-       RETURN
-    ENDIF
+    CALL HCOX_FireInject_Validate( Inst%VerticalInjectFrac,              &
+                                  Inst%VerticalInjectLevels, 'GFED', RC )
+    IF ( RC /= HCO_SUCCESS ) RETURN
 
     IF ( Inst%VerticalInjectFrac > 0.0_hp ) THEN
        ALLOCATE( Inst%SpcArr3D(HcoState%NX,HcoState%NY,HcoState%NZ), STAT=AS )
