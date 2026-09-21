@@ -105,6 +105,7 @@ CONTAINS
     USE HCOX_GFED_Mod,          ONLY : HCOX_GFED_Init
     USE HCOX_MEGAN_Mod,         ONLY : HCOX_MEGAN_Init
     USE HCOX_Finn_Mod,          ONLY : HCOX_FINN_Init
+    USE HCOX_FINNv25_Mod,       ONLY : HCOX_FINNv25_Init
     USE HCOX_GFAS_Mod,          ONLY : HCOX_GFAS_Init
     USE HCOX_GC_RnPbBe_Mod,     ONLY : HCOX_GC_RnPbBe_Init
     USE HCOX_GC_POPs_Mod,       ONLY : HCOX_GC_POPs_Init
@@ -294,7 +295,16 @@ CONTAINS
        ENDIF
 
        !--------------------------------------------------------------------
-       ! GFAS biomass burning emissions (3D injection profile)
+       ! FINNv2.5 species-resolved emissions with GFED-style injection
+       !--------------------------------------------------------------------
+       CALL HCOX_FINNv25_Init( HcoState, 'FINNv25_Inject', ExtState, RC )
+       IF ( RC /= HCO_SUCCESS ) THEN
+          ErrMsg = 'Error encountered in "HCOX_FINNv25_Init"!'
+          CALL HCO_ERROR( ErrMsg, RC, ThisLoc )
+          RETURN
+       ENDIF
+
+       ! GFAS biomass burning emissions (reference-species 3D profile)
        !--------------------------------------------------------------------
        CALL HCOX_GFAS_Init( HcoState, 'GFAS', ExtState, RC )
        IF ( RC /= HCO_SUCCESS ) THEN
@@ -374,6 +384,18 @@ CONTAINS
        RETURN
     ENDIF
 
+    ! Only one biomass-burning inventory may provide model emissions.
+    ! GFAS uses its official reference-species 3-D profile; FINN, FINNv2.5,
+    ! and GFED are independent inventory paths and must not be added with it.
+    IF ( ( MERGE( 1, 0, ExtState%GFED    > 0 ) + &
+           MERGE( 1, 0, ExtState%GFAS    > 0 ) + &
+           MERGE( 1, 0, ExtState%FINN    > 0 ) + &
+           MERGE( 1, 0, ExtState%FINNv25 > 0 ) ) > 1 ) THEN
+       ErrMsg = 'Only one of GFED, GFAS, FINN, or FINNv2.5 may be enabled'
+       CALL HCO_ERROR( ErrMsg, RC, ThisLoc )
+       RETURN
+    ENDIF
+
     !=======================================================================
     ! Define diagnostics (can skip for dry-run)
     !=======================================================================
@@ -423,6 +445,7 @@ CONTAINS
     USE HCOX_Megan_Mod,         ONLY : HCOX_Megan_Run
     USE HCOX_GFED_Mod,          ONLY : HCOX_GFED_Run
     USE HCOX_FINN_Mod,          ONLY : HCOX_FINN_Run
+    USE HCOX_FINNv25_Mod,       ONLY : HCOX_FINNv25_Run
     USE HCOX_GFAS_Mod,          ONLY : HCOX_GFAS_Run
     USE HCOX_GC_RnPbBe_Mod,     ONLY : HCOX_GC_RnPbBe_Run
     USE HCOX_GC_POPs_Mod,       ONLY : HCOX_GC_POPs_Run
@@ -636,7 +659,18 @@ CONTAINS
        ENDIF
 
        !--------------------------------------------------------------------
-       ! GFAS biomass burning emissions (3D injection profile)
+       ! FINNv2.5 species-resolved emissions
+       !--------------------------------------------------------------------
+       IF ( ExtState%FINNv25 > 0 ) THEN
+          CALL HCOX_FINNv25_Run( ExtState, HcoState, RC )
+          IF ( RC /= HCO_SUCCESS ) THEN
+             ErrMsg = 'Error encountered in "HCOX_FINNv25_Run"!'
+             CALL HCO_ERROR( ErrMsg, RC, ThisLoc )
+             RETURN
+          ENDIF
+       ENDIF
+
+       ! GFAS biomass burning emissions (reference-species 3D profile)
        !--------------------------------------------------------------------
        IF ( ExtState%GFAS > 0 ) THEN
           CALL HCOX_GFAS_Run( ExtState, HcoState, RC )
@@ -766,6 +800,7 @@ CONTAINS
     USE HCOX_MEGAN_Mod,         ONLY : HCOX_MEGAN_Final
     USE HCOX_GFED_Mod,          ONLY : HCOX_GFED_Final
     USE HCOX_FINN_Mod,          ONLY : HCOX_FINN_Final
+    USE HCOX_FINNv25_Mod,       ONLY : HCOX_FINNv25_Final
     USE HCOX_GFAS_Mod,          ONLY : HCOX_GFAS_Final
     USE HCOX_GC_RnPbBe_Mod,     ONLY : HCOX_GC_RnPbBe_Final
     USE HCOX_GC_POPs_Mod,       ONLY : HCOX_GC_POPs_Final
@@ -849,6 +884,10 @@ CONTAINS
 
           IF ( ExtState%FINN > 0      ) THEN
              CALL HcoX_FINN_Final( ExtState )
+          ENDIF
+
+          IF ( ExtState%FINNv25 > 0 ) THEN
+             CALL HCOX_FINNv25_Final( ExtState )
           ENDIF
 
           IF ( ExtState%GFAS > 0      ) THEN

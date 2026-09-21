@@ -5,13 +5,16 @@ add_library(HCOX STATIC EXCLUDE_FROM_ALL
         hcox_custom_mod.F90
 	hcox_driver_mod.F90
         hcox_dustl23m_mod.F90
+	hcox_fire_injection_mod.F90
 	hcox_finn_include.FINNv16
 	hcox_finn_mod.F90
 	hcox_finn_mod.FINNv16
+	hcox_finnv25_mod.F90
+	hcox_gfas_mod.F90
 	hcox_gc_POPs_mod.F90
 	hcox_gc_RnPbBe_mod.F90
+	hcox_gfed_scaling_mod.F90
 	hcox_gfed_mod.F90
-	hcox_gfas_mod.F90
 	hcox_iodine_mod.F90
 	hcox_lightnox_mod.F90
 	hcox_megan_mod.F90
@@ -31,4 +34,3 @@ target_link_libraries(HCOX
 target_include_directories(HCOX
 	INTERFACE ${HEMCO_BINARY_DIR}/mod
 )
-

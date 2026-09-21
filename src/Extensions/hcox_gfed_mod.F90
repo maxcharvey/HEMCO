@@ -17,6 +17,7 @@ MODULE HCOX_GFED_MOD
   USE HCO_ERROR_MOD
   USE HCO_DIAGN_MOD
   USE HCOX_TOOLS_MOD
+  USE HCOX_GFED_SCALING_MOD, ONLY : CONFIGURE_GFED_CO_RATIOS
   USE HCO_STATE_MOD,  ONLY : HCO_State
   USE HCOX_State_MOD, ONLY : Ext_State
 
@@ -74,11 +75,14 @@ MODULE HCOX_GFED_MOD
 !       Mu, M., Kasibhatla, P. S., Morton, D. C., DeFries, R. S., Jin, Y.,
 !       and van Leeuwen, T. T.: Global fire emissions and the contribution of
 !       deforestation, savanna, forest, agricultural, and peat fires
-!       (1997â~@~S2009), Atmos. Chem. Phys., 10, 11707-11735,
+!       (1997ï¿½~@~S2009), Atmos. Chem. Phys., 10, 11707-11735,
 !       doi:10.5194/acp-10-11707-2010, 2010.
 !
 ! !REVISION HISTORY:
 !  07 Sep 2011 - P. Kasibhatla - Initial version, based on GFED2
+!  06 Aug 2026 - M. Harvey - Make SOAP/FSOAP ratios inherit CO scaling
+!  06 Aug 2026 - M. Harvey - Add runtime GFED vertical-injection controls
+!  21 Jul 2026 - M. Harvey - Gate BrC GFED partitioning on GEOS-Chem setting
 !  See https://github.com/geoschem/hemco for complete history
 !EOP
 !------------------------------------------------------------------------------
@@ -147,6 +151,21 @@ MODULE HCOX_GFED_MOD
    REAL(sp)                       :: BCPIfrac
    REAL(sp)                       :: POG1frac
    REAL(sp)                       :: SOAPfrac
+   REAL(sp)                       :: FSOAPfrac ! BrC: CO to FSOAP (mch 25/02/26)
+   REAL(sp)                       :: DBRCPOAfrac ! BrC: BC to DBRCPOA scale factor (mch 19/03/26)
+   REAL(sp)                       :: NPBRCPOAfrac ! BrC: OC to NPBRCPOA (mch 25/02/26)
+   REAL(sp)                       :: PBRCPOAfrac ! BrC: persistent fraction of NPBRCPOA
+   LOGICAL                        :: UseBrC
+
+   !=================================================================
+   ! VERTICAL-INJECTION VARIABLES
+   !
+   ! VerticalInjectFrac   : fraction emitted above the PBL
+   ! VerticalInjectLevels : number of model levels above PBL for it
+   !=================================================================
+   REAL(hp)                       :: VerticalInjectFrac
+   INTEGER                        :: VerticalInjectLevels
+   REAL(hp), POINTER              :: SpcArr3D(:,:,:) => NULL()
 
    !=================================================================
    ! DATA ARRAY POINTERS
@@ -191,6 +210,7 @@ CONTAINS
     USE HCO_Calc_Mod,     ONLY : HCO_EvalFld
     USE HCO_EmisList_Mod, ONLY : HCO_GetPtr
     USE HCO_FluxArr_MOD,  ONLY : HCO_EmisAdd
+    USE HCOX_FIRE_INJECTION_MOD, ONLY : HCOX_FireInject_Apply
 !
 ! !INPUT/OUTPUT PARAMETERS:
 !
@@ -218,16 +238,6 @@ CONTAINS
 
     TYPE(MyInst), POINTER :: Inst
 
-!==============================================================================
-! This code is required for the vertical distribution of biomass burning emiss.
-! We will keep it here for a future implementation. (mps, 4/24/17)
-!    INTEGER             :: I, J, L, N, M
-!    INTEGER             :: PBL_MAX
-!    REAL(hp)            :: PBL_FRAC, F_OF_PBL, F_OF_FT
-!    REAL(hp)            :: DELTPRES, TOTPRESFT
-!    REAL(hp), TARGET    :: SpcArr3D(HcoState%NX,HcoState%NY,HcoState%NZ)
-!==============================================================================
-
     !=================================================================
     ! HCOX_GFED_Run begins here!
     !=================================================================
@@ -251,14 +261,6 @@ CONTAINS
        CALL HCO_ERROR(MSG,RC)
        RETURN
     ENDIF
-
-!==============================================================================
-! This code is required for the vertical distribution of biomass burning emiss.
-! We will keep it here for a future implementation. (mps, 4/24/17)
-!    ! Add only 65% biomass burning source to boundary layer, the
-!    ! rest is emitted into the free troposphere (mps from evf+tjb, 3/10/17)
-!    PBL_FRAC = 0.65_hp
-!==============================================================================
 
     !-----------------------------------------------------------------
     ! Get pointers to data arrays
@@ -328,15 +330,21 @@ CONTAINS
        IF ( Inst%HcoIDs(N)  < 0 ) CYCLE
        IF ( Inst%GfedIDs(N) < 0 ) CYCLE
 
+       ! Skip branch-specific BrC emissions when disabled.  OCPI and OCPO
+       ! retain their main-branch GFED partitioning in the SELECT CASE below.
+       IF ( .NOT. Inst%UseBrC ) THEN
+          SELECT CASE ( Inst%SpcNames(N) )
+             CASE ( 'FSOAP', 'DBRCPOA', 'NPBRCPOA', 'PBRCPOA' )
+                CYCLE
+          END SELECT
+       ENDIF
+
        ! SpcArr are the total biomass burning emissions for this
        ! species. TypArr are the emissions from a given source type.
        SpcArr   = 0.0_hp
-!==============================================================================
-! This code is required for the vertical distribution of biomass burning emiss.
-! We will keep it here for a future implementation. (mps, 4/24/17)
-!       SpcArr3D = 0.0_hp
-!==============================================================================
-
+       IF ( Inst%VerticalInjectFrac > 0.0_hp ) THEN
+          Inst%SpcArr3D = 0.0_hp
+       ENDIF
        ! Calculate emissions for all source types
        DO M = 1, N_EMFAC
 
@@ -397,8 +405,14 @@ CONTAINS
        SELECT CASE ( Inst%SpcNames(N) )
           CASE ( 'OCPI' )
              SpcArr = SpcArr * Inst%OCPIfrac
+             IF ( Inst%UseBrC ) THEN
+                SpcArr = SpcArr * (1.0_sp - Inst%NPBRCPOAfrac)
+             ENDIF
           CASE ( 'OCPO' )
              SpcArr = SpcArr * (1.0_sp - Inst%OCPIfrac)
+             IF ( Inst%UseBrC ) THEN
+                SpcArr = SpcArr * (1.0_sp - Inst%NPBRCPOAfrac)
+             ENDIF
           CASE ( 'BCPI' )
              SpcArr = SpcArr * Inst%BCPIfrac
           CASE ( 'BCPO' )
@@ -409,6 +423,16 @@ CONTAINS
              SpcArr = SpcArr * (1.0_sp - Inst%POG1frac)
           CASE ( 'SOAP' )
              SpcArr = SpcArr * Inst%SOAPfrac
+          CASE ( 'FSOAP' )                               ! BrC (mch)
+             SpcArr = SpcArr * Inst%FSOAPfrac
+          CASE ( 'DBRCPOA' )                             ! BrC (mch)
+             SpcArr = SpcArr * Inst%DBRCPOAfrac
+          CASE ( 'NPBRCPOA')                             ! BrC (mch)
+             SpcArr = SpcArr * Inst%NPBRCPOAfrac         &
+                             * (1.0_sp - Inst%PBRCPOAfrac)
+          CASE ( 'PBRCPOA')                              ! BrC (mch)
+             SpcArr = SpcArr * Inst%NPBRCPOAfrac         &
+                             * Inst%PBRCPOAfrac
 !==============================================================================
 ! This code is required for partitioning NOx emissions directly to PAN and HNO3.
 ! We will keep it here as an option for users focusing on North American fires.
@@ -433,82 +457,20 @@ CONTAINS
            RETURN
        ENDIF
 
-!==============================================================================
-! This code is required for the vertical distribution of biomass burning emiss.
-! We will keep it here for a future implementation. (mps, 4/24/17)
-!
-!       !--------------------------------------------------------------------
-!       ! For grid boxes with emissions, distribute 65% to PBL and 35% to FT
-!       !--------------------------------------------------------------------
-!       DO J = 1, HcoState%Ny
-!       DO I = 1, HcoState%Nx
-!
-!          IF ( SpcArr(I,J) > 0e+0_hp ) THEN
-!
-!             ! Initialize
-!             PBL_MAX  = 1
-!             F_OF_PBL = 0e+0_hp
-!             F_OF_FT  = 0e+0_hp
-!             DELTPRES = 0e+0_hp
-!
-!             ! Determine PBL height
-!             DO L = HcoState%NZ, 1, -1
-!                IF ( ExtState%FRAC_OF_PBL%Arr%Val(I,J,L) > 0.0_hp ) THEN
-!                   PBL_MAX = L
-!                   EXIT
-!                ENDIF
-!             ENDDO
-!
-!             ! Loop over the boundary layer
-!             DO L = 1, PBL_MAX
-!
-!                ! Fraction of PBL that box (I,J,L) makes up [unitless]
-!                F_OF_PBL = ExtState%FRAC_OF_PBL%Arr%Val(I,J,L)
-!
-!                ! Add only 65% biomass burning source to PBL
-!                ! Distribute emissions thru the entire boundary layer
-!                ! (mps from evf+tjb, 3/10/17)
-!                SpcArr3D(I,J,L) = SpcArr(I,J) * PBL_FRAC * F_OF_PBL
-!
-!             ENDDO
-!
-!
-!             ! Total thickness of the free troposphere [hPa]
-!             ! (considered here to be 10 levels above the PBL)
-!             TOTPRESFT = HcoState%Grid%PEDGE%Val(I,J,PBL_MAX+1) - &
-!                         HcoState%Grid%PEDGE%Val(I,J,PBL_MAX+11)
-!
-!
-!             ! Loop over the free troposphere
-!             DO L = PBL_MAX+1, PBL_MAX+10
-!
-!                ! Thickness of level L [hPa]
-!                DELTPRES = HcoState%Grid%PEDGE%Val(I,J,L) - &
-!                           HcoState%Grid%PEDGE%Val(I,J,L+1)
-!
-!                ! Fraction of FT that box (I,J,L) makes up [unitless]
-!                F_OF_FT = DELTPRES / TOTPRESFT
-!
-!                ! Add 35% of biomass burning source to free troposphere
-!                ! Distribute emissions thru 10 model levels above the BL
-!                ! (mps from evf+tjb, 3/10/17)
-!                SpcArr3D(I,J,L) = SpcArr(I,J) * (1.0-PBL_FRAC) * F_OF_FT
-!
-!             ENDDO
-!
-!          ENDIF
-!
-!       ENDDO
-!       ENDDO
-!
-!       ! Add flux to HEMCO emission array
-!       ! Now 3D flux (mps, 3/10/17)
-!       CALL HCO_EmisAdd( HcoState,   SpcArr3D, HcoIDs(N), &
-!                         RC,        ExtNr=ExtNr )
-!==============================================================================
+       IF ( Inst%VerticalInjectFrac > 0.0_hp ) THEN
+          CALL HCOX_FireInject_Apply( HcoState, ExtState, SpcArr,           &
+                                      Inst%VerticalInjectFrac,               &
+                                      Inst%VerticalInjectLevels,             &
+                                      Inst%SpcArr3D, 'GFED', RC )
+          IF ( RC /= HCO_SUCCESS ) RETURN
 
-       ! Add flux to HEMCO emission array
-       CALL HCO_EmisAdd( HcoState, SpcArr, Inst%HcoIDs(N), RC, ExtNr=Inst%ExtNr )
+          CALL HCO_EmisAdd( HcoState, Inst%SpcArr3D, Inst%HcoIDs(N),        &
+                            RC, ExtNr=Inst%ExtNr )
+       ELSE
+          ! Zero vertical fraction preserves legacy surface-only emissions.
+          CALL HCO_EmisAdd( HcoState, SpcArr, Inst%HcoIDs(N),               &
+                            RC, ExtNr=Inst%ExtNr )
+       ENDIF
        IF ( RC /= HCO_SUCCESS ) THEN
           MSG = 'HCO_EmisAdd error: ' // TRIM(HcoState%Spc(Inst%HcoIDs(N))%SpcName)
           CALL HCO_ERROR(MSG, RC )
@@ -547,6 +509,7 @@ CONTAINS
     USE HCO_STATE_MOD,          ONLY : HCO_GetExtHcoID
     USE HCO_ExtList_Mod,        ONLY : GetExtNr, GetExtOpt
     USE HCO_ExtList_Mod,        ONLY : GetExtSpcVal
+    USE HCOX_FIRE_INJECTION_MOD, ONLY : HCOX_FireInject_Validate
 !
 ! !INPUT/OUTPUT PARAMETERS:
 !
@@ -625,6 +588,16 @@ CONTAINS
        RETURN
     ENDIF
 
+    ! GEOS-Chem injects this option from aerosols%carbon%brown_carbon.
+    ! Default to false so standalone HEMCO keeps its pre-BrC behavior.
+    CALL GetExtOpt( HcoState%Config, Inst%ExtNr, 'GEOSCHEM_BROWN_CARBON', &
+                     OptValBool=Inst%UseBrC, FOUND=FOUND, RC=RC )
+    IF ( RC /= HCO_SUCCESS ) THEN
+       CALL HCO_ERROR( 'ERROR 10b', RC, THISLOC=LOC )
+       RETURN
+    ENDIF
+    IF ( .NOT. FOUND ) Inst%UseBrC = .FALSE.
+
     ! ----------------------------------------------------------------------
     ! Get settings
     ! The speciation of carbon aerosols into hydrophilic and hydrophobic
@@ -690,13 +663,78 @@ CONTAINS
        Inst%SOAPfrac = ValSp
     ENDIF
 
+
+    ! Try to read CO to FSOAP fraction. Defaults to 0.0 (mch)
+    CALL GetExtOpt( HcoState%Config, ExtNr, 'CO to FSOAP', &
+                     OptValSp=ValSp, FOUND=FOUND, RC=RC )
+    IF ( RC /= HCO_SUCCESS ) THEN
+        CALL HCO_ERROR( 'ERROR 14b', RC, THISLOC=LOC )
+        RETURN
+    ENDIF
+    IF ( .NOT. FOUND ) THEN
+       Inst%FSOAPfrac = 0.0
+    ELSE
+       Inst%FSOAPfrac = ValSp
+    ENDIF
+
+    ! Try to read BC to DBRCPOA scaling factor. Defaults to 0.0 (mch)
+    ! DBRCPOA emissions = DBRCPOAfrac * BB BC carbon mass
+    ! Set to 4.0 in HEMCO config for 4x BC scaling
+    CALL GetExtOpt( HcoState%Config, ExtNr, 'BC to DBRCPOA',                &
+                     OptValSp=ValSp, FOUND=FOUND, RC=RC )
+    IF ( RC /= HCO_SUCCESS ) THEN
+        CALL HCO_ERROR( 'ERROR 14c', RC, THISLOC=LOC )
+        RETURN
+    ENDIF
+    IF ( .NOT. FOUND ) THEN
+       Inst%DBRCPOAfrac = 0.0
+    ELSE
+       Inst%DBRCPOAfrac = ValSp
+    ENDIF
+
+    ! Try to read OC to NPBRCPOA fraction. Defaults to 0.0 (mch)
+    CALL GetExtOpt( HcoState%Config, ExtNr, 'OC to NPBRCPOA',                &
+                     OptValSp=ValSp, FOUND=FOUND, RC=RC )
+    IF ( RC /= HCO_SUCCESS ) THEN
+        CALL HCO_ERROR( 'ERROR 14c', RC, THISLOC=LOC )
+        RETURN
+    ENDIF
+    IF ( .NOT. FOUND ) THEN
+       Inst%NPBRCPOAfrac = 0.0
+    ELSE
+       Inst%NPBRCPOAfrac = ValSp
+    ENDIF
+
+    ! Try to read persistent NPBRCPOA fraction. Defaults to 0.25.
+    CALL GetExtOpt( HcoState%Config, ExtNr,                              &
+                    'NPBRCPOA persistent fraction',                       &
+                     OptValSp=ValSp, FOUND=FOUND, RC=RC )
+    IF ( RC /= HCO_SUCCESS ) THEN
+        CALL HCO_ERROR( 'ERROR 14d', RC, THISLOC=LOC )
+        RETURN
+    ENDIF
+    IF ( .NOT. FOUND ) THEN
+       Inst%PBRCPOAfrac = 0.25
+    ELSE
+       Inst%PBRCPOAfrac = ValSp
+    ENDIF
+
+
     ! Error check: OCPIfrac, BCPIfrac, and POG1frac must be between 0 and 1
+    ! Note: DBRCPOAfrac is a scaling factor (e.g. 4.0), not a fraction,
+    ! so only its lower bound is checked.
     IF ( Inst%OCPIfrac < 0.0_sp .OR. Inst%OCPIfrac > 1.0_sp .OR. &
          Inst%BCPIfrac < 0.0_sp .OR. Inst%BCPIfrac > 1.0_sp .OR. &
          Inst%SOAPfrac < 0.0_sp .OR. Inst%SOAPfrac > 1.0_sp .OR. &
+         Inst%FSOAPfrac   < 0.0_sp .OR. Inst%FSOAPfrac   > 1.0_sp .OR. &
+         Inst%NPBRCPOAfrac < 0.0_sp .OR. Inst%NPBRCPOAfrac > 1.0_sp .OR. &
+         Inst%PBRCPOAfrac < 0.0_sp .OR. Inst%PBRCPOAfrac > 1.0_sp .OR. &
+         Inst%DBRCPOAfrac < 0.0_sp .OR.                                   &
          Inst%POG1frac < 0.0_sp .OR. Inst%POG1frac > 1.0_sp     ) THEN
        WRITE(MSG,*) 'fractions must be between 0-1: ', &
-          Inst%OCPIfrac, Inst%BCPIfrac, Inst%POG1frac, Inst%SOAPfrac
+          Inst%OCPIfrac, Inst%BCPIfrac, Inst%POG1frac, Inst%SOAPfrac,    &
+          Inst%FSOAPfrac, Inst%DBRCPOAfrac, Inst%NPBRCPOAfrac,           &
+          Inst%PBRCPOAfrac
        CALL HCO_ERROR(MSG, RC )
        RETURN
     ENDIF
@@ -721,6 +759,39 @@ CONTAINS
     ENDIF
     IF ( .NOT. FOUND ) THEN
        Inst%Do3Hr = .FALSE.
+    ENDIF
+
+    ! Optional 3-D fire-emission allocation. A zero fraction preserves
+    ! legacy surface-only GFED emissions through the 2-D HEMCO path.
+    CALL GetExtOpt( HcoState%Config, Inst%ExtNr,                         &
+                    'GFED_vertical_injection_fraction',                 &
+                    OptValHp=Inst%VerticalInjectFrac, FOUND=FOUND, RC=RC )
+    IF ( RC /= HCO_SUCCESS ) THEN
+       CALL HCO_ERROR( 'ERROR 16a', RC, THISLOC=LOC )
+       RETURN
+    ENDIF
+    IF ( .NOT. FOUND ) Inst%VerticalInjectFrac = 0.0_hp
+
+    CALL GetExtOpt( HcoState%Config, Inst%ExtNr,                         &
+                    'GFED_vertical_injection_levels',                   &
+                    OptValInt=Inst%VerticalInjectLevels, FOUND=FOUND, RC=RC )
+    IF ( RC /= HCO_SUCCESS ) THEN
+       CALL HCO_ERROR( 'ERROR 16b', RC, THISLOC=LOC )
+       RETURN
+    ENDIF
+    IF ( .NOT. FOUND ) Inst%VerticalInjectLevels = 0
+
+    CALL HCOX_FireInject_Validate( Inst%VerticalInjectFrac,              &
+                                  Inst%VerticalInjectLevels, 'GFED', RC )
+    IF ( RC /= HCO_SUCCESS ) RETURN
+
+    IF ( Inst%VerticalInjectFrac > 0.0_hp ) THEN
+       ALLOCATE( Inst%SpcArr3D(HcoState%NX,HcoState%NY,HcoState%NZ), STAT=AS )
+       IF ( AS /= 0 ) THEN
+          CALL HCO_ERROR( 'Cannot allocate GFED vertical emission array', RC )
+          RETURN
+       ENDIF
+       Inst%SpcArr3D = 0.0_hp
     ENDIF
 
     !-----------------------------------------------------------------------
@@ -777,6 +848,10 @@ CONTAINS
        CALL HCO_MSG(MSG, LUN=HcoState%Config%hcoLogLUN )
        WRITE(MSG,*) '   - Use hourly scale factors: ', Inst%Do3Hr
        CALL HCO_MSG(MSG, LUN=HcoState%Config%hcoLogLUN )
+       WRITE(MSG,*) '   - Vertical injection frac  : ', Inst%VerticalInjectFrac
+       CALL HCO_MSG(MSG, LUN=HcoState%Config%hcoLogLUN )
+       WRITE(MSG,*) '   - Vertical injection levels: ', Inst%VerticalInjectLevels
+       CALL HCO_MSG(MSG, LUN=HcoState%Config%hcoLogLUN )
        WRITE(MSG,*) '   - Hydrophilic OC fraction : ', Inst%OCPIfrac
        CALL HCO_MSG(MSG, LUN=HcoState%Config%hcoLogLUN )
        WRITE(MSG,*) '   - Hydrophilic BC fraction : ', Inst%BCPIfrac
@@ -785,7 +860,19 @@ CONTAINS
        CALL HCO_MSG(MSG, LUN=HcoState%Config%hcoLogLUN )
        WRITE(MSG,*) '   - SOAP fraction           : ', Inst%SOAPfrac
        CALL HCO_MSG(MSG, LUN=HcoState%Config%hcoLogLUN )
+       WRITE(MSG,*) '   - FSOAP fraction          : ', Inst%FSOAPfrac
+       CALL HCO_MSG(MSG, LUN=HcoState%Config%hcoLogLUN )
+       WRITE(MSG,*) '   - DBRCPOA BC scale factor : ', Inst%DBRCPOAfrac
+       CALL HCO_MSG(MSG, LUN=HcoState%Config%hcoLogLUN )
+       WRITE(MSG,*) '   - NPBRCPOA fraction        : ', Inst%NPBRCPOAfrac
+       CALL HCO_MSG(MSG, LUN=HcoState%Config%hcoLogLUN )
+       WRITE(MSG,*) '   - PBRCPOA persistent frac  : ', Inst%PBRCPOAfrac
+       CALL HCO_MSG(MSG, LUN=HcoState%Config%hcoLogLUN )
+       WRITE(MSG,*) '   - Brown carbon enabled     : ', Inst%UseBrC
+       CALL HCO_MSG(MSG, LUN=HcoState%Config%hcoLogLUN )
+
     ENDIF
+
 
     ! Get HEMCO species IDs of all species specified in configuration file
     CALL HCO_GetExtHcoID( HcoState, Inst%ExtNr, HcoIDs, SpcNames, Inst%nSpc, RC )
@@ -825,6 +912,17 @@ CONTAINS
     Inst%SpcScal       = SpcScal
     Inst%SpcScalFldNme = SpcScalFldNme
     DEALLOCATE(SpcScal,SpcScalFldNme)
+
+    ! SOAP and FSOAP are specified as final emitted ratios to GFED CO.
+    ! Inherit CO scaling once, before any source-species remapping, so NAP and
+    ! species-list ordering cannot modify either ratio.
+    CALL CONFIGURE_GFED_CO_RATIOS( Inst%SpcNames, Inst%SOAPfrac,            &
+                                   Inst%FSOAPfrac, Inst%SpcScal,            &
+                                   Inst%SpcScalFldNme, HCOX_NOSCALE, MSG )
+    IF ( LEN_TRIM(MSG) > 0 ) THEN
+       CALL HCO_ERROR( TRIM(MSG), RC )
+       RETURN
+    ENDIF
 
     ! Error trap: in previous versions, CO, POA and NAP scale factor were given as
     ! 'CO scale factor', etc. Make sure those attributes do not exist any more!
@@ -900,6 +998,12 @@ CONTAINS
        IF ( TRIM(SpcName) == 'POG1' ) SpcName = 'OC'
        IF ( TRIM(SpcName) == 'POG2' ) SpcName = 'OC'
        IF ( TRIM(SpcName) == 'NAP'  ) SpcName = 'CO'
+       IF ( TRIM(SpcName) == 'SOAP' ) SpcName = 'CO'
+       IF ( TRIM(SpcName) == 'FSOAP'   ) SpcName = 'CO'   ! BrC (mch)
+       IF ( TRIM(SpcName) == 'DBRCPOA' ) SpcName = 'BC'   ! BrC: scale from BC (mch)
+       IF ( TRIM(SpcName) == 'NPBRCPOA' ) SpcName = 'OC'   ! BrC (mch)
+       IF ( TRIM(SpcName) == 'PBRCPOA'  ) SpcName = 'OC'   ! BrC (mch)
+
 !==============================================================================
 ! This code is required for partitioning NOx emissions directly to PAN and HNO3.
 ! We will keep it here as an option for users focusing on North American fires.
@@ -907,11 +1011,6 @@ CONTAINS
 !       IF ( TRIM(SpcName) == 'PAN'  ) SpcName = 'NO'
 !       IF ( TRIM(SpcName) == 'HNO3' ) SpcName = 'NO'
 !==============================================================================
-
-       ! adjust SOAP scale factor by CO scale factor (SOAP co-emitted with CO)
-       IF ( TRIM(SpcName) == 'CO' ) THEN
-         Inst%SOAPfrac = Inst%SOAPfrac * Inst%SpcScal(N)
-       END IF
 
        ! Search for matching GFED species by name
        Matched = .FALSE.
@@ -945,12 +1044,9 @@ CONTAINS
     ! Activate this module and the fields of ExtState that it uses
     !=======================================================================
 
-!==============================================================================
-! This code is required for the vertical distribution of biomass burning emiss.
-! We will keep it here for a future implementation. (mps, 4/24/17)
-!    ! Activate met fields required by this extension
-!    ExtState%FRAC_OF_PBL%DoUse = .TRUE.
-!==============================================================================
+    IF ( Inst%VerticalInjectFrac > 0.0_hp ) THEN
+       ExtState%FRAC_OF_PBL%DoUse = .TRUE.
+    ENDIF
 
     ! Enable module
     !ExtState%GFED = .TRUE.
@@ -1219,6 +1315,11 @@ CONTAINS
           DEALLOCATE( Inst%HRSCAL )
        ENDIF
        Inst%HRSCAL => NULL()
+
+       IF ( ASSOCIATED( Inst%SpcArr3D ) ) THEN
+          DEALLOCATE( Inst%SpcArr3D )
+       ENDIF
+       Inst%SpcArr3D => NULL()
 
        IF ( ASSOCIATED( Inst%GFED4_EMFAC ) ) THEN
           DEALLOCATE( Inst%GFED4_EMFAC )
