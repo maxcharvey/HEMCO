@@ -2,7 +2,8 @@ PROGRAM HCOX_GFED_SCALING_TEST
 
   USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY : IEEE_IS_FINITE, IEEE_QUIET_NAN, &
                                              IEEE_VALUE
-  USE HCO_PRECISION_MOD,              ONLY : f4, hp
+  USE HCO_PRECISION_MOD,              ONLY : f4
+  USE HCO_ERROR_MOD,                  ONLY : hp
   USE HCOX_FIRE_INJECTION_MOD,        ONLY : HCOX_FireInject_Profile
   USE HCOX_GFED_SCALING_MOD,          ONLY : CONFIGURE_GFED_CO_RATIOS
 
