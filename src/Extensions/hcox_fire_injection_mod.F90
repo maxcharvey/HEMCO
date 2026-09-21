@@ -70,9 +70,23 @@ CONTAINS
     REAL(hp)                       :: Profile(HcoState%NZ)
 
     Flux3D = 0.0_hp
+
+    ! The legacy zero-control path is surface-only and must not require the
+    ! PBL-fraction field. Validate source fluxes before any field access.
+    IF ( ANY( .NOT. IEEE_IS_FINITE(Flux2D) ) .OR. &
+         ANY( Flux2D < 0.0_hp ) ) THEN
+       MSG = TRIM(InventoryName) // ' injection has invalid source flux'
+       CALL HCO_ERROR( MSG, RC )
+       RETURN
+    ENDIF
+    IF ( ElevatedFrac == 0.0_hp .AND. ElevatedLevels == 0 ) THEN
+       Flux3D(:,:,1) = Flux2D
+       RETURN
+    ENDIF
+
     DO J = 1, HcoState%NY
     DO I = 1, HcoState%NX
-       IF ( Flux2D(I,J) <= 0.0_hp ) CYCLE
+       IF ( Flux2D(I,J) == 0.0_hp ) CYCLE
 
        PBLFrac = ExtState%FRAC_OF_PBL%Arr%Val(I,J,:)
        PEdge   = HcoState%Grid%PEDGE%Val(I,J,:)
@@ -114,6 +128,11 @@ CONTAINS
 
     Profile = 0.0_hp
     Status  = 0
+    IF ( SIZE(Profile) /= SIZE(PBLFrac) .OR. &
+         SIZE(PEdge) /= SIZE(PBLFrac) + 1 ) THEN
+       Status = 1
+       RETURN
+    ENDIF
     IF ( .NOT. IEEE_IS_FINITE(Flux) .OR. &
          .NOT. IEEE_IS_FINITE(ElevatedFrac) .OR. &
          ANY( .NOT. IEEE_IS_FINITE(PBLFrac) ) .OR. &
@@ -122,17 +141,17 @@ CONTAINS
        RETURN
     ENDIF
     IF ( Flux == 0.0_hp ) RETURN
-    IF ( Flux < 0.0_hp .OR. ElevatedFrac < 0.0_hp .OR. &
+    IF ( ElevatedFrac == 0.0_hp .AND. ElevatedLevels == 0 ) THEN
+       Profile(1) = Flux
+       RETURN
+    ENDIF
+    IF ( Flux < 0.0_hp .OR. ElevatedLevels < 1 .OR. &
+         ElevatedFrac < 0.0_hp .OR. &
          ElevatedFrac > 1.0_hp .OR. ANY( PBLFrac < 0.0_hp ) .OR. &
          ANY( PEdge(:SIZE(PEdge)-1) <= PEdge(2:) ) ) THEN
        Status = 4
        RETURN
-    ENDIF
-    IF ( SIZE(Profile) /= SIZE(PBLFrac) .OR. &
-         SIZE(PEdge) /= SIZE(PBLFrac) + 1 ) THEN
-       Status = 1
-       RETURN
-    ENDIF
+   ENDIF
 
     PBLMax = 0
     DO L = SIZE(PBLFrac), 1, -1
