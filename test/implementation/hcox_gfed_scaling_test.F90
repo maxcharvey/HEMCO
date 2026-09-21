@@ -267,15 +267,19 @@ CONTAINS
     IF ( Status /= 0 ) ERROR STOP 69
     CALL Assert_Close_Hp( SUM(Profile), 0.0_hp, 70 )
 
+    CALL HCOX_FireInject_Profile( Flux, PBL, PEdge, Frac, 10, Profile, Status )
+    IF ( Status /= 1 ) ERROR STOP 71
+    CALL Assert_Close_Hp( SUM(Profile), 0.0_hp, 72 )
+
     PBL(1) = 1.0_hp
     CALL HCOX_FireInject_Profile( Flux, PBL, PEdge,                         &
                                    IEEE_VALUE(Flux, IEEE_QUIET_NAN), 10,     &
                                    Profile, Status )
-    IF ( Status /= 4 ) ERROR STOP 71
-    CALL HCOX_FireInject_Profile( -Flux, PBL, PEdge, Frac, 10, Profile, Status )
-    IF ( Status /= 4 ) ERROR STOP 72
-    CALL HCOX_FireInject_Profile( Flux, PBL, PEdge, 0.0_hp, 10, Profile, Status )
     IF ( Status /= 4 ) ERROR STOP 73
+    CALL HCOX_FireInject_Profile( -Flux, PBL, PEdge, Frac, 10, Profile, Status )
+    IF ( Status /= 4 ) ERROR STOP 74
+    CALL HCOX_FireInject_Profile( Flux, PBL, PEdge, 0.0_hp, 10, Profile, Status )
+    IF ( Status /= 4 ) ERROR STOP 75
 
   END SUBROUTINE Check_Fire_Injection_Profile
 
