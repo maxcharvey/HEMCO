@@ -6,6 +6,8 @@ set(REQUIRED_GFED_TEXT
     "CALL CONFIGURE_GFED_CO_RATIOS("
     "IF ( TRIM(SpcName) == 'SOAP' ) SpcName = 'CO'"
     "IF ( TRIM(SpcName) == 'FSOAP'   ) SpcName = 'CO'"
+    "CALL HCOX_FireInject_Apply( HcoState, ExtState, SpcArr,"
+    "CALL HCO_EmisAdd( HcoState, Inst%SpcArr3D, Inst%HcoIDs(N),"
 )
 foreach(TEXT IN LISTS REQUIRED_GFED_TEXT)
     string(FIND "${GFED_SOURCE}" "${TEXT}" POSITION)
@@ -13,6 +15,17 @@ foreach(TEXT IN LISTS REQUIRED_GFED_TEXT)
         message(FATAL_ERROR "Missing GFED scaling integration: ${TEXT}")
     endif()
 endforeach()
+
+# A 2-D delivery would leave requested 3-D Ext111 diagnostics unfilled,
+# even though the model's actual surface emissions are correct.
+string(FIND "${GFED_SOURCE}"
+    "CALL HCO_EmisAdd( HcoState, SpcArr, Inst%HcoIDs(N)," SURFACE_2D_POSITION)
+if(NOT SURFACE_2D_POSITION EQUAL -1)
+    message(FATAL_ERROR "GFED surface emissions must also deliver a 3-D profile")
+endif()
+# The separate FRAC_OF_PBL%DoUse guard must remain conditional: a surface
+# profile deliberately needs no PBL input. Runtime closure tests exercise
+# zero-injection allocation/delivery rather than forbidding that valid guard.
 
 string(FIND "${GFED_SOURCE}"
     "Inst%SOAPfrac = Inst%SOAPfrac * Inst%SpcScal(N)" STALE_POSITION)

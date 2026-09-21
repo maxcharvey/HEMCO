@@ -3,8 +3,11 @@ PROGRAM HCOX_GFED_SCALING_TEST
   USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY : IEEE_IS_FINITE, IEEE_QUIET_NAN, &
                                              IEEE_VALUE
   USE HCO_PRECISION_MOD,              ONLY : f4
-  USE HCO_ERROR_MOD,                  ONLY : hp
-  USE HCOX_FIRE_INJECTION_MOD,        ONLY : HCOX_FireInject_Profile
+  USE HCO_ERROR_MOD,                  ONLY : hp, HCO_SUCCESS
+  USE HCO_STATE_MOD,                  ONLY : HCO_State
+  USE HCOX_STATE_MOD,                 ONLY : Ext_State
+  USE HCOX_FIRE_INJECTION_MOD,        ONLY : HCOX_FireInject_Profile, &
+                                             HCOX_FireInject_Apply
   USE HCOX_GFED_SCALING_MOD,          ONLY : CONFIGURE_GFED_CO_RATIOS
 
   IMPLICIT NONE
@@ -28,10 +31,38 @@ PROGRAM HCOX_GFED_SCALING_TEST
   CALL Check_Repeated_Initialization
   CALL Check_Rejections
   CALL Check_Fire_Injection_Profile
+  CALL Check_Surface_Apply
 
   WRITE(*,'(a)') 'PASS: executable GFED CO-ratio scaling regression'
 
 CONTAINS
+
+  SUBROUTINE Check_Surface_Apply
+    TYPE(HCO_State), TARGET :: State
+    TYPE(HCO_State), POINTER :: StatePtr
+    TYPE(Ext_State), POINTER :: ExtPtr
+    REAL(hp) :: Surface(2,2), Profile(2,2,4)
+    INTEGER :: RC
+
+    State%NX = 2
+    State%NY = 2
+    State%NZ = 4
+    StatePtr => State
+    ExtPtr => NULL()  ! The surface-only path must never inspect PBL fields.
+    Surface = RESHAPE( (/ 0.0_hp, 1.0_hp, 2.0_hp, 3.0_hp /), (/ 2, 2 /) )
+    Profile = -99.0_hp
+    RC = HCO_SUCCESS
+    CALL HCOX_FireInject_Apply( StatePtr, ExtPtr, Surface, 0.0_hp, 0, &
+                                 Profile, 'GFED test', RC )
+    IF ( RC /= HCO_SUCCESS ) ERROR STOP 81
+    IF ( ANY(Profile(:,:,1) /= Surface) ) ERROR STOP 82
+    IF ( ANY(Profile(:,:,2:) /= 0.0_hp) ) ERROR STOP 83
+    IF ( ANY(SUM(Profile,DIM=3) /= Surface) ) ERROR STOP 84
+    Surface = 0.0_hp
+    CALL HCOX_FireInject_Apply( StatePtr, ExtPtr, Surface, 0.0_hp, 0, &
+                                 Profile, 'GFED test', RC )
+    IF ( RC /= HCO_SUCCESS .OR. ANY(Profile /= 0.0_hp) ) ERROR STOP 85
+  END SUBROUTINE Check_Surface_Apply
 
   RECURSIVE SUBROUTINE Permute( Position )
 

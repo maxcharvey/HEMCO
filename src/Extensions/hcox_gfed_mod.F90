@@ -342,9 +342,7 @@ CONTAINS
        ! SpcArr are the total biomass burning emissions for this
        ! species. TypArr are the emissions from a given source type.
        SpcArr   = 0.0_hp
-       IF ( Inst%VerticalInjectFrac > 0.0_hp ) THEN
-          Inst%SpcArr3D = 0.0_hp
-       ENDIF
+       Inst%SpcArr3D = 0.0_hp
        ! Calculate emissions for all source types
        DO M = 1, N_EMFAC
 
@@ -457,20 +455,17 @@ CONTAINS
            RETURN
        ENDIF
 
-       IF ( Inst%VerticalInjectFrac > 0.0_hp ) THEN
-          CALL HCOX_FireInject_Apply( HcoState, ExtState, SpcArr,           &
-                                      Inst%VerticalInjectFrac,               &
-                                      Inst%VerticalInjectLevels,             &
-                                      Inst%SpcArr3D, 'GFED', RC )
-          IF ( RC /= HCO_SUCCESS ) RETURN
+       ! Always supply a 3-D array: HEMCO does not populate 3-D diagnostics
+       ! from its 2-D emission interface. The explicit 0/0 control places
+       ! the entire column in level 1 without accessing PBL fields.
+       CALL HCOX_FireInject_Apply( HcoState, ExtState, SpcArr,           &
+                                   Inst%VerticalInjectFrac,               &
+                                   Inst%VerticalInjectLevels,             &
+                                   Inst%SpcArr3D, 'GFED', RC )
+       IF ( RC /= HCO_SUCCESS ) RETURN
 
-          CALL HCO_EmisAdd( HcoState, Inst%SpcArr3D, Inst%HcoIDs(N),        &
-                            RC, ExtNr=Inst%ExtNr )
-       ELSE
-          ! Zero vertical fraction preserves legacy surface-only emissions.
-          CALL HCO_EmisAdd( HcoState, SpcArr, Inst%HcoIDs(N),               &
-                            RC, ExtNr=Inst%ExtNr )
-       ENDIF
+       CALL HCO_EmisAdd( HcoState, Inst%SpcArr3D, Inst%HcoIDs(N),        &
+                         RC, ExtNr=Inst%ExtNr )
        IF ( RC /= HCO_SUCCESS ) THEN
           MSG = 'HCO_EmisAdd error: ' // TRIM(HcoState%Spc(Inst%HcoIDs(N))%SpcName)
           CALL HCO_ERROR(MSG, RC )
@@ -761,8 +756,8 @@ CONTAINS
        Inst%Do3Hr = .FALSE.
     ENDIF
 
-    ! Optional 3-D fire-emission allocation. A zero fraction preserves
-    ! legacy surface-only GFED emissions through the 2-D HEMCO path.
+    ! Optional elevated allocation. A zero fraction preserves surface-only
+    ! GFED emissions, represented in 3-D so profile diagnostics remain valid.
     CALL GetExtOpt( HcoState%Config, Inst%ExtNr,                         &
                     'GFED_vertical_injection_fraction',                 &
                     OptValHp=Inst%VerticalInjectFrac, FOUND=FOUND, RC=RC )
@@ -785,14 +780,12 @@ CONTAINS
                                   Inst%VerticalInjectLevels, 'GFED', RC )
     IF ( RC /= HCO_SUCCESS ) RETURN
 
-    IF ( Inst%VerticalInjectFrac > 0.0_hp ) THEN
-       ALLOCATE( Inst%SpcArr3D(HcoState%NX,HcoState%NY,HcoState%NZ), STAT=AS )
-       IF ( AS /= 0 ) THEN
-          CALL HCO_ERROR( 'Cannot allocate GFED vertical emission array', RC )
-          RETURN
-       ENDIF
-       Inst%SpcArr3D = 0.0_hp
+    ALLOCATE( Inst%SpcArr3D(HcoState%NX,HcoState%NY,HcoState%NZ), STAT=AS )
+    IF ( AS /= 0 ) THEN
+       CALL HCO_ERROR( 'Cannot allocate GFED vertical emission array', RC )
+       RETURN
     ENDIF
+    Inst%SpcArr3D = 0.0_hp
 
     !-----------------------------------------------------------------------
     ! Initialize GFED scale factors
