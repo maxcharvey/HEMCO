@@ -26,6 +26,7 @@ MODULE HCOX_GFAS_MOD
   USE HCO_DIAGN_MOD
   USE HCOX_TOOLS_MOD
   USE HCO_STATE_MOD,  ONLY : HCO_State
+  USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY : IEEE_IS_FINITE
   USE HCOX_State_MOD, ONLY : Ext_State
 
   IMPLICIT NONE
@@ -172,6 +173,14 @@ CONTAINS
                     'section of HEMCO_Config.rc with SrcDim=xyz, or change ',  &
                     'the "Vertical Profile Species" option.'
        CALL HCO_ERROR(MSG, RC, THISLOC=LOC )
+       RETURN
+    ENDIF
+
+    ! Invalid reference values cannot define a physical vertical profile.
+    IF ( ANY( .NOT. IEEE_IS_FINITE(Inst%Ref3D) ) .OR. &
+         ANY( Inst%Ref3D < 0.0_hp ) ) THEN
+       CALL HCO_ERROR( 'GFAS reference 3D field has invalid values', RC, &
+                       THISLOC=LOC )
        RETURN
     ENDIF
 

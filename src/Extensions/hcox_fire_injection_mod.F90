@@ -7,12 +7,14 @@ MODULE HCOX_FIRE_INJECTION_MOD
   USE HCO_ERROR_MOD
   USE HCO_STATE_MOD,  ONLY : HCO_State
   USE HCOX_STATE_MOD, ONLY : Ext_State
+  USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY : IEEE_IS_FINITE
 
   IMPLICIT NONE
   PRIVATE
 
   PUBLIC :: HCOX_FireInject_Validate
   PUBLIC :: HCOX_FireInject_Apply
+  PUBLIC :: HCOX_FireInject_Profile
 
 CONTAINS
 
@@ -62,63 +64,106 @@ CONTAINS
     INTEGER, INTENT(INOUT)         :: RC
 
     CHARACTER(LEN=255)             :: MSG
-    INTEGER                        :: I, J, L, PBL_MAX
-    REAL(hp)                       :: DELTPRES, F_OF_FT, F_OF_PBL
-    REAL(hp)                       :: PBL_SUM, TOTPRESFT
+    INTEGER                        :: I, J, Status
+    REAL(hp)                       :: PBLFrac(HcoState%NZ)
+    REAL(hp)                       :: PEdge(HcoState%NZ+1)
+    REAL(hp)                       :: Profile(HcoState%NZ)
 
     Flux3D = 0.0_hp
     DO J = 1, HcoState%NY
     DO I = 1, HcoState%NX
        IF ( Flux2D(I,J) <= 0.0_hp ) CYCLE
 
-       PBL_MAX = 0
-       DO L = HcoState%NZ, 1, -1
-          IF ( ExtState%FRAC_OF_PBL%Arr%Val(I,J,L) > 0.0_hp ) THEN
-             PBL_MAX = L
-             EXIT
-          ENDIF
-       ENDDO
-
-       PBL_SUM = 0.0_hp
-       DO L = 1, PBL_MAX
-          PBL_SUM = PBL_SUM + MAX( 0.0_hp,                              &
-                                   ExtState%FRAC_OF_PBL%Arr%Val(I,J,L) )
-       ENDDO
-       IF ( PBL_SUM <= 0.0_hp ) THEN
-          MSG = TRIM(InventoryName) // ' injection has invalid PBL fractions'
+       PBLFrac = ExtState%FRAC_OF_PBL%Arr%Val(I,J,:)
+       PEdge   = HcoState%Grid%PEDGE%Val(I,J,:)
+       CALL HCOX_FireInject_Profile( Flux2D(I,J), PBLFrac, PEdge,        &
+                                     ElevatedFrac, ElevatedLevels,       &
+                                     Profile, Status )
+       IF ( Status /= 0 ) THEN
+          SELECT CASE ( Status )
+             CASE ( 1 )
+                MSG = TRIM(InventoryName) // ' injection has invalid PBL fractions'
+             CASE ( 2 )
+                MSG = TRIM(InventoryName) // ' injection lacks requested FT levels'
+             CASE ( 3 )
+                MSG = TRIM(InventoryName) // ' injection has nonpositive FT depth'
+             CASE DEFAULT
+                MSG = TRIM(InventoryName) // ' injection has invalid numeric input'
+          END SELECT
           CALL HCO_ERROR( MSG, RC )
           RETURN
        ENDIF
-
-       IF ( PBL_MAX + ElevatedLevels > HcoState%NZ ) THEN
-          MSG = TRIM(InventoryName) // ' injection lacks requested FT levels'
-          CALL HCO_ERROR( MSG, RC )
-          RETURN
-       ENDIF
-
-       DO L = 1, PBL_MAX
-          F_OF_PBL = MAX( 0.0_hp,                                       &
-                          ExtState%FRAC_OF_PBL%Arr%Val(I,J,L) ) / PBL_SUM
-          Flux3D(I,J,L) = Flux2D(I,J) * ( 1.0_hp - ElevatedFrac ) * F_OF_PBL
-       ENDDO
-
-       TOTPRESFT = HcoState%Grid%PEDGE%Val(I,J,PBL_MAX+1) -             &
-                   HcoState%Grid%PEDGE%Val(I,J,PBL_MAX+ElevatedLevels+1)
-       IF ( TOTPRESFT <= 0.0_hp ) THEN
-          MSG = TRIM(InventoryName) // ' injection has nonpositive FT depth'
-          CALL HCO_ERROR( MSG, RC )
-          RETURN
-       ENDIF
-
-       DO L = PBL_MAX+1, PBL_MAX+ElevatedLevels
-          DELTPRES = HcoState%Grid%PEDGE%Val(I,J,L) -                    &
-                     HcoState%Grid%PEDGE%Val(I,J,L+1)
-          F_OF_FT = DELTPRES / TOTPRESFT
-          Flux3D(I,J,L) = Flux2D(I,J) * ElevatedFrac * F_OF_FT
-       ENDDO
+       Flux3D(I,J,:) = Profile
     ENDDO
     ENDDO
 
   END SUBROUTINE HCOX_FireInject_Apply
+
+
+  PURE SUBROUTINE HCOX_FireInject_Profile( Flux, PBLFrac, PEdge,          &
+                                           ElevatedFrac, ElevatedLevels,  &
+                                           Profile, Status )
+
+    REAL(hp), INTENT(IN)  :: Flux, PBLFrac(:), PEdge(:), ElevatedFrac
+    INTEGER, INTENT(IN)   :: ElevatedLevels
+    REAL(hp), INTENT(OUT) :: Profile(:)
+    INTEGER, INTENT(OUT)  :: Status
+
+    INTEGER  :: L, PBLMax
+    REAL(hp) :: DeltaPres, PBLTotal, FTTotal
+
+    Profile = 0.0_hp
+    Status  = 0
+    IF ( .NOT. IEEE_IS_FINITE(Flux) .OR. &
+         .NOT. IEEE_IS_FINITE(ElevatedFrac) .OR. &
+         ANY( .NOT. IEEE_IS_FINITE(PBLFrac) ) .OR. &
+         ANY( .NOT. IEEE_IS_FINITE(PEdge) ) ) THEN
+       Status = 4
+       RETURN
+    ENDIF
+    IF ( Flux == 0.0_hp ) RETURN
+    IF ( Flux < 0.0_hp .OR. ElevatedFrac < 0.0_hp .OR. &
+         ElevatedFrac > 1.0_hp .OR. ANY( PBLFrac < 0.0_hp ) .OR. &
+         ANY( PEdge(:SIZE(PEdge)-1) <= PEdge(2:) ) ) THEN
+       Status = 4
+       RETURN
+    ENDIF
+    IF ( SIZE(Profile) /= SIZE(PBLFrac) .OR. &
+         SIZE(PEdge) /= SIZE(PBLFrac) + 1 ) THEN
+       Status = 1
+       RETURN
+    ENDIF
+
+    PBLMax = 0
+    DO L = SIZE(PBLFrac), 1, -1
+       IF ( PBLFrac(L) > 0.0_hp ) THEN
+          PBLMax = L
+          EXIT
+       ENDIF
+    ENDDO
+    PBLTotal = SUM( MAX( 0.0_hp, PBLFrac(1:PBLMax) ) )
+    IF ( PBLTotal <= 0.0_hp ) THEN
+       Status = 1
+       RETURN
+    ENDIF
+    IF ( PBLMax + ElevatedLevels > SIZE(Profile) ) THEN
+       Status = 2
+       RETURN
+    ENDIF
+
+    Profile(1:PBLMax) = Flux * ( 1.0_hp - ElevatedFrac ) *               &
+                          MAX( 0.0_hp, PBLFrac(1:PBLMax) ) / PBLTotal
+    FTTotal = PEdge(PBLMax+1) - PEdge(PBLMax+ElevatedLevels+1)
+    IF ( FTTotal <= 0.0_hp ) THEN
+       Status = 3
+       Profile = 0.0_hp
+       RETURN
+    ENDIF
+    DO L = PBLMax+1, PBLMax+ElevatedLevels
+       DeltaPres = PEdge(L) - PEdge(L+1)
+       Profile(L) = Flux * ElevatedFrac * DeltaPres / FTTotal
+    ENDDO
+
+  END SUBROUTINE HCOX_FireInject_Profile
 
 END MODULE HCOX_FIRE_INJECTION_MOD

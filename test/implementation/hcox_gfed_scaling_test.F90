@@ -1,7 +1,9 @@
 PROGRAM HCOX_GFED_SCALING_TEST
 
-  USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY : IEEE_IS_FINITE
-  USE HCO_PRECISION_MOD,              ONLY : f4
+  USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY : IEEE_IS_FINITE, IEEE_QUIET_NAN, &
+                                             IEEE_VALUE
+  USE HCO_PRECISION_MOD,              ONLY : f4, hp
+  USE HCOX_FIRE_INJECTION_MOD,        ONLY : HCOX_FireInject_Profile
   USE HCOX_GFED_SCALING_MOD,          ONLY : CONFIGURE_GFED_CO_RATIOS
 
   IMPLICIT NONE
@@ -24,6 +26,7 @@ PROGRAM HCOX_GFED_SCALING_TEST
   CALL Check_Mask_Propagation
   CALL Check_Repeated_Initialization
   CALL Check_Rejections
+  CALL Check_Fire_Injection_Profile
 
   WRITE(*,'(a)') 'PASS: executable GFED CO-ratio scaling regression'
 
@@ -228,6 +231,62 @@ CONTAINS
     CALL Assert_Close( Scales(4), 1.05_f4, 39 )
 
   END SUBROUTINE Check_Repeated_Initialization
+
+  SUBROUTINE Check_Fire_Injection_Profile
+
+    INTEGER :: Status
+    REAL(hp) :: Flux, Frac, PBL(20), PEdge(21), Profile(20)
+
+    PBL = 0.0_hp
+    PBL(1:3) = (/ 0.2_hp, 0.3_hp, 0.5_hp /)
+    DO Status = 1, SIZE(PEdge)
+       PEdge(Status) = 1000.0_hp - 25.0_hp * REAL(Status-1,hp)
+    ENDDO
+
+    Flux = 10.0_hp
+    Frac = 0.35_hp
+    CALL HCOX_FireInject_Profile( Flux, PBL, PEdge, Frac, 10, Profile, Status )
+    IF ( Status /= 0 ) ERROR STOP 60
+    CALL Assert_Close_Hp( SUM(Profile), Flux, 61 )
+    CALL Assert_Close_Hp( SUM(Profile(1:3)), Flux*(1.0_hp-Frac), 62 )
+    CALL Assert_Close_Hp( SUM(Profile(4:13)), Flux*Frac, 63 )
+
+    CALL HCOX_FireInject_Profile( Flux, PBL, PEdge, Frac, 15, Profile, Status )
+    IF ( Status /= 0 ) ERROR STOP 64
+    CALL Assert_Close_Hp( SUM(Profile), Flux, 65 )
+    CALL Assert_Close_Hp( SUM(Profile(4:18)), Flux*Frac, 66 )
+
+    PBL = 0.0_hp
+    PBL(19) = 1.0_hp
+    CALL HCOX_FireInject_Profile( Flux, PBL, PEdge, Frac, 2, Profile, Status )
+    IF ( Status /= 2 ) ERROR STOP 67
+    CALL Assert_Close_Hp( SUM(Profile), 0.0_hp, 68 )
+
+    PBL = 0.0_hp
+    CALL HCOX_FireInject_Profile( 0.0_hp, PBL, PEdge, Frac, 10, Profile, Status )
+    IF ( Status /= 0 ) ERROR STOP 69
+    CALL Assert_Close_Hp( SUM(Profile), 0.0_hp, 70 )
+
+    PBL(1) = 1.0_hp
+    CALL HCOX_FireInject_Profile( Flux, PBL, PEdge,                         &
+                                   IEEE_VALUE(Flux, IEEE_QUIET_NAN), 10,     &
+                                   Profile, Status )
+    IF ( Status /= 4 ) ERROR STOP 71
+    CALL HCOX_FireInject_Profile( -Flux, PBL, PEdge, Frac, 10, Profile, Status )
+    IF ( Status /= 4 ) ERROR STOP 72
+    CALL HCOX_FireInject_Profile( Flux, PBL, PEdge, 0.0_hp, 10, Profile, Status )
+    IF ( Status /= 4 ) ERROR STOP 73
+
+  END SUBROUTINE Check_Fire_Injection_Profile
+
+  SUBROUTINE Assert_Close_Hp( Actual, Expected, Code )
+
+    REAL(hp), INTENT(IN) :: Actual, Expected
+    INTEGER, INTENT(IN)  :: Code
+
+    IF ( ABS(Actual-Expected) > 1.0e-12_hp ) ERROR STOP Code
+
+  END SUBROUTINE Assert_Close_Hp
 
   SUBROUTINE Check_Rejections
 
