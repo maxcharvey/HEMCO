@@ -141,12 +141,15 @@ CONTAINS
        RETURN
     ENDIF
     IF ( Flux == 0.0_hp ) RETURN
+    IF ( Flux < 0.0_hp ) THEN
+       Status = 4
+       RETURN
+    ENDIF
     IF ( ElevatedFrac == 0.0_hp .AND. ElevatedLevels == 0 ) THEN
        Profile(1) = Flux
        RETURN
     ENDIF
-    IF ( Flux < 0.0_hp .OR. ElevatedLevels < 1 .OR. &
-         ElevatedFrac < 0.0_hp .OR. &
+    IF ( ElevatedLevels < 1 .OR. ElevatedFrac <= 0.0_hp .OR. &
          ElevatedFrac > 1.0_hp .OR. ANY( PBLFrac < 0.0_hp ) .OR. &
          ANY( PEdge(:SIZE(PEdge)-1) <= PEdge(2:) ) ) THEN
        Status = 4
