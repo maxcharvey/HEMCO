@@ -49,6 +49,7 @@ CONTAINS
     ENDIF
     ! Needed also for the emitted above-PBL metric, in every hybrid mode.
     ExtState%FRAC_OF_PBL%DoUse = .TRUE.
+    ExtState%PBL_OCCUPANCY%DoUse = .TRUE.
     DO N=1,SIZE(IDs)
        IF ( IDs(N) < 0 ) CYCLE
        DO M=1,SIZE(Metrics)
@@ -113,6 +114,12 @@ CONTAINS
           CALL HCO_ERROR('Invalid PBL fractions in FINN profile allocation', RC)
           RETURN
        ENDIF
+       PBL=ExtState%PBL_OCCUPANCY%Arr%Val(I,J,:)
+       IF ( ANY(.NOT. IEEE_IS_FINITE(PBL)) .OR. ANY(PBL<0.0_hp) .OR. ANY(PBL>1.0_hp) ) THEN
+          CALL HCO_ERROR('Invalid native PBL occupancy in FINN profile diagnostics', RC)
+          RETURN
+       ENDIF
+       PBL=ExtState%FRAC_OF_PBL%Arr%Val(I,J,:)
        W=Weights(I,J,:)
        IF ( Reason(I,J) /= 0 ) THEN
           SELECT CASE (TRIM(Fallback))
@@ -173,7 +180,7 @@ CONTAINS
     DO J=1,HcoState%NY
     DO I=1,HcoState%NX
        IF ( Source(I,J)>0.0_hp ) &
-          A(I,J)=SUM(Emission(I,J,:)*(1.0_hp-ExtState%FRAC_OF_PBL%Arr%Val(I,J,:)))
+          A(I,J)=SUM(Emission(I,J,:)*(1.0_hp-ExtState%PBL_OCCUPANCY%Arr%Val(I,J,:)))
     ENDDO
     ENDDO
     CALL Diagn_Update(HcoState,cName='FINNProfileAbovePBL_'//TRIM(Name), &
