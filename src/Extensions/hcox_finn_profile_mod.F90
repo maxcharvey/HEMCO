@@ -29,7 +29,7 @@ CONTAINS
     INTEGER :: N, M, AS
     CHARACTER(LEN=32), PARAMETER :: Metrics(5) = [ CHARACTER(LEN=32) :: &
          'FINNProfileSource_', 'FINNProfileFallback_', &
-         'FINNProfileTerrain_', 'FINNProfileAbovePBL_', 'FINNProfileMissingSupport_' ]
+         'FINNProfileTerrain_', 'FINNProfileAbovePBL_', 'FINNProfileMissing_' ]
     CALL GetExtOpt(HcoState%Config, ExtNr, 'FINNV25_GFAS_PROFILE', &
                    OptValBool=ProfileEnabled, FOUND=Found, RC=RC)
     IF ( RC /= HCO_SUCCESS ) RETURN
@@ -62,6 +62,11 @@ CONTAINS
     DO N=1,SIZE(IDs)
        IF ( IDs(N) < 0 ) CYCLE
        DO M=1,SIZE(Metrics)
+          ! HEMCO's NetCDF writer stores output names in 31 characters.
+          IF ( LEN_TRIM(Metrics(M))+LEN_TRIM(Names(N)) > 31 ) THEN
+             CALL HCO_ERROR('FINN diagnostic name exceeds HEMCO 31-character limit',RC)
+             RETURN
+          ENDIF
           CALL Diagn_Create(HcoState=HcoState, cName=TRIM(Metrics(M))//TRIM(Names(N)), &
                ExtNr=ExtNr, Cat=-1, Hier=-1, HcoID=IDs(N), SpaceDim=2, &
                OutUnit='kg/m2/s', AutoFill=0, RC=RC)
@@ -206,7 +211,7 @@ CONTAINS
     IF ( RC /= HCO_SUCCESS ) RETURN
     Column=SUM(Emission,DIM=3)
     A=Column*(1.0_hp-SupportFraction)
-    CALL Diagn_Update(HcoState,cName='FINNProfileMissingSupport_'//TRIM(Name), &
+    CALL Diagn_Update(HcoState,cName='FINNProfileMissing_'//TRIM(Name), &
                        AutoFill=0,Array2D=A,RC=RC)
     IF (RC/=HCO_SUCCESS) RETURN
     A=0.0_hp
