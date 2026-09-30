@@ -9,6 +9,8 @@ MODULE HCOX_FINNv25_MOD
   USE HCO_STATE_MOD,  ONLY : HCO_State
   USE HCOX_STATE_MOD, ONLY : Ext_State
 
+  USE HCOX_FINN_PROFILE_MOD
+
   IMPLICIT NONE
   PRIVATE
 
@@ -90,6 +92,13 @@ CONTAINS
     SpcNames = TmpNames
     DEALLOCATE( TmpIDs, TmpNames )
 
+    CALL FINN_Profile_Init(HcoState,ExtState,ExtNr,HcoIDs,SpcNames,RC)
+    IF ( RC /= HCO_SUCCESS ) RETURN
+    IF ( ProfileEnabled .AND. (VerticalInjectFrac /= 0.0_hp .OR. VerticalInjectLevels /= 0) ) THEN
+       CALL HCO_ERROR('FINN GFAS profile requires legacy fraction/levels both zero', RC)
+       RETURN
+    ENDIF
+
     ExtNrSaved       = ExtNr
     ExtState%FINNv25 = ExtNr
     IF ( VerticalInjectFrac > 0.0_hp ) THEN
@@ -130,6 +139,11 @@ CONTAINS
     CALL HCO_ENTER( HcoState%Config%Err, LOC, RC )
     IF ( RC /= HCO_SUCCESS ) RETURN
 
+    IF ( ProfileEnabled ) THEN
+       CALL FINN_Profile_Prepare(HcoState,RC)
+       IF ( RC /= HCO_SUCCESS ) RETURN
+    ENDIF
+
     DO N = 1, nSpc
        IF ( HcoIDs(N) < 0 ) CYCLE
        FieldName = 'FINNV25_INJECT_' // TRIM(SpcNames(N))
@@ -141,7 +155,13 @@ CONTAINS
           RETURN
        ENDIF
 
-       IF ( VerticalInjectFrac > 0.0_hp ) THEN
+       IF ( ProfileEnabled ) THEN
+          CALL FINN_Profile_Apply(HcoState,ExtState,SpcArr,SpcArr3D,RC)
+          IF ( RC /= HCO_SUCCESS ) RETURN
+          CALL HCO_EmisAdd(HcoState,SpcArr3D,HcoIDs(N),RC,ExtNr=ExtNrSaved)
+          IF ( RC /= HCO_SUCCESS ) RETURN
+          CALL FINN_Profile_Report(HcoState,ExtState,HcoIDs(N),SpcNames(N),SpcArr,SpcArr3D,RC)
+       ELSEIF ( VerticalInjectFrac > 0.0_hp ) THEN
           CALL HCOX_FireInject_Apply( HcoState, ExtState, SpcArr,         &
                                      VerticalInjectFrac,                 &
                                      VerticalInjectLevels, SpcArr3D,     &
@@ -168,6 +188,7 @@ CONTAINS
   SUBROUTINE HCOX_FINNv25_Final( ExtState )
     TYPE(Ext_State), POINTER :: ExtState
 
+    CALL FINN_Profile_Final()
     IF ( ALLOCATED(HcoIDs)   ) DEALLOCATE(HcoIDs)
     IF ( ALLOCATED(SpcNames) ) DEALLOCATE(SpcNames)
     IF ( ALLOCATED(SpcArr3D) ) DEALLOCATE(SpcArr3D)
