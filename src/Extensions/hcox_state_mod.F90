@@ -170,7 +170,8 @@ MODULE HCOX_STATE_MOD
      TYPE(ExtDat_2R),  POINTER :: CONV_DEPTH  ! Convective cloud depth [m]
      INTEGER,          POINTER :: PBL_MAX     ! Max height of PBL [level]
      TYPE(ExtDat_3R),  POINTER :: CNV_MFC     ! Convective cloud mass flux [kg/m2/s]
-     TYPE(ExtDat_3R),  POINTER :: FRAC_OF_PBL ! Fraction of grid box in PBL
+     TYPE(ExtDat_3R),  POINTER :: FRAC_OF_PBL ! Normalized mass distribution within PBL
+     TYPE(ExtDat_3R),  POINTER :: PBL_OCCUPANCY ! Fraction of each layer below PBL top
      TYPE(ExtDat_3R),  POINTER :: SPHU        ! Spec. humidity [kg H2O/kg total air]
      TYPE(ExtDat_3R),  POINTER :: TK          ! Air temperature [K]
      TYPE(ExtDat_3R),  POINTER :: AIR         ! Dry air mass [kg]
@@ -605,6 +606,13 @@ CONTAINS
        RETURN
     ENDIF
 
+    CALL ExtDat_Init( ExtState%PBL_OCCUPANCY, RC )
+    IF ( RC /= HCO_SUCCESS ) THEN
+       MSG = 'Could not allocate ExtState%PBL_OCCUPANCY'
+       CALL HCO_ERROR( MSG, RC, THISLOC=LOC )
+       RETURN
+    ENDIF
+
     CALL ExtDat_Init( ExtState%SPHU, RC )
     IF ( RC /= HCO_SUCCESS ) THEN
        MSG = 'Could not allocate ExtState%SPHU'
@@ -793,6 +801,7 @@ CONTAINS
        CALL ExtDat_Cleanup( ExtState%JOH        )
        CALL ExtDat_Cleanup( ExtState%CNV_MFC    )
        CALL ExtDat_Cleanup( ExtState%FRAC_OF_PBL)
+       CALL ExtDat_Cleanup( ExtState%PBL_OCCUPANCY)
        CALL ExtDat_Cleanup( ExtState%SPHU       )
        CALL ExtDat_Cleanup( ExtState%TK         )
        CALL ExtDat_Cleanup( ExtState%AIR        )

@@ -3,15 +3,17 @@ MODULE HCOX_FINN_PROFILE_MOD
   USE HCO_ERROR_MOD
   USE HCO_STATE_MOD, ONLY: HCO_State
   USE HCOX_STATE_MOD, ONLY: Ext_State
-  USE HCOX_FINN_PROFILE_KERNEL_MOD, ONLY: FINN_Normalize, FINN_Allocate
+  USE HCOX_FINN_PROFILE_KERNEL_MOD, ONLY: FINN_Normalize, FINN_Allocate, FINN_HeightProfile
   USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_IS_FINITE
   IMPLICIT NONE
   PRIVATE
   PUBLIC :: FINN_Profile_Init, FINN_Profile_Prepare, FINN_Profile_Apply
   PUBLIC :: FINN_Profile_Report, FINN_Profile_Final, ProfileEnabled
   LOGICAL, SAVE :: ProfileEnabled = .FALSE.
-  CHARACTER(LEN=31), PARAMETER :: MethodName = 'gfas_prepared'
+  CHARACTER(LEN=31), PARAMETER :: MethodName = 'gfas_uniform'
   CHARACTER(LEN=31), SAVE :: Fallback = 'pbl'
+  CHARACTER(LEN=31), SAVE :: HeightDatum='UNSET'
+  REAL(hp), ALLOCATABLE, SAVE :: SupportFraction(:,:)
   REAL(hp), ALLOCATABLE, SAVE :: Weights(:,:,:)
   INTEGER, ALLOCATABLE, SAVE :: Reason(:,:) ! 0 valid, 1 unavailable, 2 terrain
 CONTAINS
@@ -25,9 +27,9 @@ CONTAINS
     INTEGER, INTENT(INOUT) :: RC
     LOGICAL :: Found
     INTEGER :: N, M, AS
-    CHARACTER(LEN=20), PARAMETER :: Metrics(4) = [ CHARACTER(LEN=20) :: &
+    CHARACTER(LEN=32), PARAMETER :: Metrics(5) = [ CHARACTER(LEN=32) :: &
          'FINNProfileSource_', 'FINNProfileFallback_', &
-         'FINNProfileTerrain_', 'FINNProfileAbovePBL_' ]
+         'FINNProfileTerrain_', 'FINNProfileAbovePBL_', 'FINNProfileMissingSupport_' ]
     CALL GetExtOpt(HcoState%Config, ExtNr, 'FINNV25_GFAS_PROFILE', &
                    OptValBool=ProfileEnabled, FOUND=Found, RC=RC)
     IF ( RC /= HCO_SUCCESS ) RETURN
@@ -41,14 +43,22 @@ CONTAINS
        CALL HCO_ERROR('FINN profile fallback must be pbl, surface, or error', RC)
        RETURN
     ENDIF
+    CALL GetExtOpt(HcoState%Config, ExtNr, 'FINNv25_profile_datum', &
+                   OptValChar=HeightDatum, FOUND=Found, RC=RC)
+    IF (RC/=HCO_SUCCESS) RETURN
+    IF (.NOT.Found .OR. (HeightDatum/='MSL' .AND. HeightDatum/='AGL')) THEN
+       CALL HCO_ERROR('FINN height profile requires explicit MSL or AGL datum',RC)
+       RETURN
+    ENDIF
     ALLOCATE(Weights(HcoState%NX,HcoState%NY,HcoState%NZ), &
-             Reason(HcoState%NX,HcoState%NY), STAT=AS)
+             Reason(HcoState%NX,HcoState%NY), SupportFraction(HcoState%NX,HcoState%NY), STAT=AS)
     IF ( AS /= 0 ) THEN
        CALL HCO_ERROR('Cannot allocate FINN profile arrays', RC)
        RETURN
     ENDIF
     ! Needed also for the emitted above-PBL metric, in every hybrid mode.
     ExtState%FRAC_OF_PBL%DoUse = .TRUE.
+    ExtState%PBL_OCCUPANCY%DoUse = .TRUE.
     DO N=1,SIZE(IDs)
        IF ( IDs(N) < 0 ) CYCLE
        DO M=1,SIZE(Metrics)
@@ -68,24 +78,54 @@ CONTAINS
     USE HCO_CALC_MOD, ONLY: HCO_EvalFld
     TYPE(HCO_State), POINTER :: HcoState
     INTEGER, INTENT(INOUT) :: RC
-    REAL(hp), ALLOCATABLE :: Ref(:,:,:)
-    INTEGER :: I, J, S, AS
-    ALLOCATE(Ref(HcoState%NX,HcoState%NY,HcoState%NZ), STAT=AS)
-    IF ( AS /= 0 ) THEN
-       CALL HCO_ERROR('Cannot allocate FINN auxiliary reference', RC)
+    REAL(hp) :: Support(HcoState%NX,HcoState%NY), Total(HcoState%NX,HcoState%NY)
+    REAL(hp) :: MeanNum(HcoState%NX,HcoState%NY), TopNum(HcoState%NX,HcoState%NY)
+    REAL(hp) :: M,T,G
+    INTEGER :: I,J,S,Why
+    Support=0.0_hp
+    Total=0.0_hp
+    MeanNum=0.0_hp
+    TopNum=0.0_hp
+    CALL HCO_EvalFld(HcoState,'FINNV25_GFAS_SUPPORT',Support,RC)
+    IF (RC/=HCO_SUCCESS) RETURN
+    CALL HCO_EvalFld(HcoState,'FINNV25_GFAS_TOTAL',Total,RC)
+    IF (RC/=HCO_SUCCESS) RETURN
+    CALL HCO_EvalFld(HcoState,'FINNV25_GFAS_MAMI_MOMENT',MeanNum,RC)
+    IF (RC/=HCO_SUCCESS) RETURN
+    CALL HCO_EvalFld(HcoState,'FINNV25_GFAS_APT_MOMENT',TopNum,RC)
+    IF (RC/=HCO_SUCCESS) RETURN
+    IF (ANY(.NOT.IEEE_IS_FINITE(Support)) .OR. ANY(.NOT.IEEE_IS_FINITE(Total)) .OR. &
+        ANY(.NOT.IEEE_IS_FINITE(MeanNum)) .OR. ANY(.NOT.IEEE_IS_FINITE(TopNum))) THEN
+       CALL HCO_ERROR('Nonfinite FINN GFAS height moment input',RC)
        RETURN
     ENDIF
-    Ref=0.0_hp
-    CALL HCO_EvalFld(HcoState, 'FINNV25_GFAS_REFERENCE', Ref, RC)
-    IF ( RC /= HCO_SUCCESS ) RETURN
-    Reason=0
+    IF (ANY(Support<0.0_hp) .OR. ANY(Total<0.0_hp) .OR. &
+        ANY(Support>Total*(1.0_hp+64.0_hp*EPSILON(1.0_hp)))) THEN
+       CALL HCO_ERROR('Invalid FINN GFAS height support fraction',RC)
+       RETURN
+    ENDIF
+    Reason=1
+    Weights=0.0_hp
+    SupportFraction=0.0_hp
     DO J=1,HcoState%NY
     DO I=1,HcoState%NX
-       CALL FINN_Normalize(Ref(I,J,:), Weights(I,J,:), S)
-       IF ( S == 1 ) THEN
-          Reason(I,J)=1
-       ELSEIF ( S /= 0 ) THEN
-          CALL HCO_ERROR('Invalid FINN GFAS reference: require finite nonnegative values', RC)
+       IF (Total(I,J)>0.0_hp) SupportFraction(I,J)=MIN(1.0_hp,Support(I,J)/Total(I,J))
+       IF (Support(I,J)<=0.0_hp) CYCLE
+       M=MeanNum(I,J)/Support(I,J)
+       T=TopNum(I,J)/Support(I,J)
+       G=0.0_hp
+       IF (HeightDatum=='MSL') G=HcoState%Grid%ZSFC%Val(I,J)
+       CALL FINN_HeightProfile(M,T,G,HcoState%Grid%BXHEIGHT_M%Val(I,J,:), &
+                               .FALSE.,Weights(I,J,:),Why,S)
+       IF (S==0) THEN
+          Reason(I,J)=0
+       ELSEIF (S==1 .AND. Why==2) THEN
+          Reason(I,J)=2
+       ELSEIF (S==3) THEN
+          CALL HCO_ERROR('FINN GFAS requested height support exceeds model top',RC)
+          RETURN
+       ELSE
+          CALL HCO_ERROR('Invalid FINN GFAS height ordering, datum, or model geometry',RC)
           RETURN
        ENDIF
     ENDDO
@@ -113,6 +153,12 @@ CONTAINS
           CALL HCO_ERROR('Invalid PBL fractions in FINN profile allocation', RC)
           RETURN
        ENDIF
+       PBL=ExtState%PBL_OCCUPANCY%Arr%Val(I,J,:)
+       IF ( ANY(.NOT. IEEE_IS_FINITE(PBL)) .OR. ANY(PBL<0.0_hp) .OR. ANY(PBL>1.0_hp) ) THEN
+          CALL HCO_ERROR('Invalid native PBL occupancy in FINN profile diagnostics', RC)
+          RETURN
+       ENDIF
+       PBL=ExtState%FRAC_OF_PBL%Arr%Val(I,J,:)
        W=Weights(I,J,:)
        IF ( Reason(I,J) /= 0 ) THEN
           SELECT CASE (TRIM(Fallback))
@@ -159,6 +205,10 @@ CONTAINS
                        AutoFill=0,Array2D=A,RC=RC)
     IF ( RC /= HCO_SUCCESS ) RETURN
     Column=SUM(Emission,DIM=3)
+    A=Column*(1.0_hp-SupportFraction)
+    CALL Diagn_Update(HcoState,cName='FINNProfileMissingSupport_'//TRIM(Name), &
+                       AutoFill=0,Array2D=A,RC=RC)
+    IF (RC/=HCO_SUCCESS) RETURN
     A=0.0_hp
     WHERE (Reason/=0) A=Column
     CALL Diagn_Update(HcoState,cName='FINNProfileFallback_'//TRIM(Name), &
@@ -173,7 +223,7 @@ CONTAINS
     DO J=1,HcoState%NY
     DO I=1,HcoState%NX
        IF ( Source(I,J)>0.0_hp ) &
-          A(I,J)=SUM(Emission(I,J,:)*(1.0_hp-ExtState%FRAC_OF_PBL%Arr%Val(I,J,:)))
+          A(I,J)=SUM(Emission(I,J,:)*(1.0_hp-ExtState%PBL_OCCUPANCY%Arr%Val(I,J,:)))
     ENDDO
     ENDDO
     CALL Diagn_Update(HcoState,cName='FINNProfileAbovePBL_'//TRIM(Name), &
@@ -181,6 +231,8 @@ CONTAINS
   END SUBROUTINE FINN_Profile_Report
 
   SUBROUTINE FINN_Profile_Final()
+    IF ( ALLOCATED(SupportFraction) ) DEALLOCATE(SupportFraction)
+    HeightDatum='UNSET'
     IF ( ALLOCATED(Weights) ) DEALLOCATE(Weights)
     IF ( ALLOCATED(Reason) ) DEALLOCATE(Reason)
     ProfileEnabled=.FALSE.
