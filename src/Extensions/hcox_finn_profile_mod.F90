@@ -4,6 +4,7 @@ MODULE HCOX_FINN_PROFILE_MOD
   USE HCO_STATE_MOD, ONLY: HCO_State
   USE HCOX_STATE_MOD, ONLY: Ext_State
   USE HCOX_FINN_PROFILE_KERNEL_MOD, ONLY: FINN_Normalize, FINN_Allocate
+  USE HCOX_FIRE_INJECTION_MOD, ONLY: HCOX_FireInject_Profile
   USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_IS_FINITE
   IMPLICIT NONE
   PRIVATE
@@ -37,8 +38,9 @@ CONTAINS
                    OptValChar=Fallback, FOUND=Found, RC=RC)
     IF ( RC /= HCO_SUCCESS ) RETURN
     IF ( .NOT. Found ) Fallback = 'pbl'
-    IF ( Fallback /= 'pbl' .AND. Fallback /= 'surface' .AND. Fallback /= 'error' ) THEN
-       CALL HCO_ERROR('FINN profile fallback must be pbl, surface, or error', RC)
+    IF ( Fallback /= 'pbl' .AND. Fallback /= 'surface' .AND. Fallback /= 'error' .AND. &
+         Fallback /= 'legacy_65_35_l15' ) THEN
+       CALL HCO_ERROR('FINN profile fallback must be pbl, surface, error, or legacy_65_35_l15', RC)
        RETURN
     ENDIF
     ALLOCATE(Weights(HcoState%NX,HcoState%NY,HcoState%NZ), &
@@ -132,6 +134,17 @@ CONTAINS
           CASE ('surface')
              W=0.0_hp
              W(1)=1.0_hp
+          CASE ('legacy_65_35_l15')
+             ! Reuse the established pressure-weighted injection, including
+             ! its partial-PBL and insufficient-level guards. Only empty
+             ! auxiliary columns take this path; supported GFAS is unchanged.
+             CALL HCOX_FireInject_Profile(Source(I,J),PBL, &
+                  HcoState%Grid%PEDGE%Val(I,J,:),0.35_hp,15,Emission(I,J,:),S)
+             IF ( S /= 0 ) THEN
+                CALL HCO_ERROR('FINN 65/35 L15 fallback has invalid PBL/pressure or insufficient levels', RC)
+                RETURN
+             ENDIF
+             CYCLE
           CASE DEFAULT
              CALL HCO_ERROR('FINN emissions lack GFAS profile support; fallback=error', RC)
              RETURN
