@@ -20,6 +20,7 @@ MODULE HCOX_FINNv25_MOD
 
   INTEGER, SAVE                         :: ExtNrSaved = -1
   INTEGER, SAVE                         :: nSpc = 0
+  LOGICAL, SAVE                         :: InputsChecked = .FALSE.
   INTEGER, ALLOCATABLE, SAVE            :: HcoIDs(:)
   CHARACTER(LEN=31), ALLOCATABLE, SAVE  :: SpcNames(:)
   REAL(hp), ALLOCATABLE, SAVE           :: SpcArr3D(:,:,:)
@@ -121,6 +122,8 @@ CONTAINS
   SUBROUTINE HCOX_FINNv25_Run( ExtState, HcoState, RC )
 
     USE HCO_CALC_MOD,    ONLY : HCO_EvalFld
+    USE HCO_DATACONT_MOD, ONLY : ListCont_Find
+    USE HCO_TYPES_MOD, ONLY : ListCont, HCO_UFLAG_ONCE
     USE HCO_FLUXARR_MOD, ONLY : HCO_EmisAdd
     USE HCOX_FIRE_INJECTION_MOD, ONLY : HCOX_FireInject_Apply
 
@@ -131,6 +134,8 @@ CONTAINS
     CHARACTER(LEN=63)                :: FieldName
     CHARACTER(LEN=255)               :: MSG, LOC
     INTEGER                          :: N
+    TYPE(ListCont), POINTER           :: InputCont
+    LOGICAL                          :: Found
     REAL(hp), TARGET                 :: SpcArr(HcoState%NX,HcoState%NY)
 
     LOC = 'HCOX_FINNv25_Run (HCOX_FINNV25_MOD.F90)'
@@ -138,6 +143,33 @@ CONTAINS
 
     CALL HCO_ENTER( HcoState%Config%Err, LOC, RC )
     IF ( RC /= HCO_SUCCESS ) RETURN
+
+    IF ( .NOT. InputsChecked ) THEN
+       ! Validate the effective containers, not only our generated templates.
+       ! A daily annual file with EF/EY remains on the initialization slice.
+       DO N=1,nSpc+1
+          IF ( N <= nSpc ) THEN
+             IF ( HcoIDs(N) < 0 ) CYCLE
+             FieldName = 'FINNV25_INJECT_'//TRIM(SpcNames(N))
+          ELSE
+             IF ( .NOT. ProfileEnabled ) CYCLE
+             FieldName = 'FINNV25_GFAS_REFERENCE'
+          ENDIF
+          InputCont => NULL()
+          CALL ListCont_Find(HcoState%EmisList,TRIM(FieldName),Found,InputCont)
+          IF ( .NOT. Found ) THEN
+             CALL HCO_ERROR('Missing FINNv2.5 input container '//TRIM(FieldName),RC)
+             RETURN
+          ENDIF
+          IF ( InputCont%Dct%Dta%ncRead .AND. &
+               InputCont%Dct%Dta%UpdtFlag == HCO_UFLAG_ONCE ) THEN
+             CALL HCO_ERROR('FINNv2.5 daily input uses read-once time flag: '// &
+                            TRIM(FieldName)//'; use RF for FINN or EFY for GFAS',RC)
+             RETURN
+          ENDIF
+       ENDDO
+       InputsChecked = .TRUE.
+    ENDIF
 
     IF ( ProfileEnabled ) THEN
        CALL FINN_Profile_Prepare(HcoState,RC)
@@ -189,6 +221,7 @@ CONTAINS
     TYPE(Ext_State), POINTER :: ExtState
 
     CALL FINN_Profile_Final()
+    InputsChecked = .FALSE.
     IF ( ALLOCATED(HcoIDs)   ) DEALLOCATE(HcoIDs)
     IF ( ALLOCATED(SpcNames) ) DEALLOCATE(SpcNames)
     IF ( ALLOCATED(SpcArr3D) ) DEALLOCATE(SpcArr3D)

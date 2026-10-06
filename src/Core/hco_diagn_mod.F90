@@ -123,6 +123,7 @@ MODULE HCO_Diagn_Mod
   PUBLIC  :: HcoDiagn_Init
   PUBLIC  :: Diagn_Create
   PUBLIC  :: Diagn_Update
+  PUBLIC  :: Diagn_EnableHP
   PUBLIC  :: Diagn_Get
   PUBLIC  :: Diagn_TotalGet
   PUBLIC  :: Diagn_AutoFillLevelDefined
@@ -200,6 +201,119 @@ MODULE HCO_Diagn_Mod
   INTEGER, PARAMETER, PUBLIC     :: HcoDiagnEnd     = 3
 
 CONTAINS
+  ! Enable before the first update, after file and extension diagnostics exist.
+  ! Keep this opt-in: unrelated diagnostics and external pointers are unchanged.
+  SUBROUTINE Diagn_EnableHP( HcoState, ExtNr, RC )
+    TYPE(HCO_State), POINTER :: HcoState
+    INTEGER, INTENT(IN) :: ExtNr
+    INTEGER, INTENT(INOUT) :: RC
+    TYPE(DiagnCollection), POINTER :: Coll
+    TYPE(DiagnCont), POINTER :: Dgn
+    RC = HCO_SUCCESS
+    IF ( hp /= dp ) THEN
+       CALL HCO_ERROR('Precise diagnostic accumulation requires USE_REAL8',RC)
+       RETURN
+    ENDIF
+    Coll => HcoState%Diagn%Collections
+    DO WHILE ( ASSOCIATED(Coll) )
+       Dgn => Coll%DiagnList
+       DO WHILE ( ASSOCIATED(Dgn) )
+          IF ( Dgn%ExtNr == ExtNr .AND. .NOT. Dgn%DtaIsPtr .AND. &
+               (Dgn%SpaceDim == 2 .OR. Dgn%SpaceDim == 3) ) THEN
+             IF ( Dgn%Counter /= 0 .AND. .NOT. Dgn%AccumulateHP ) THEN
+                CALL HCO_ERROR('Cannot enable diagnostic precision after updates', RC)
+                RETURN
+             ENDIF
+             Dgn%AccumulateHP = .TRUE.
+          ENDIF
+          Dgn => Dgn%NextCont
+       ENDDO
+       Coll => Coll%NextCollection
+    ENDDO
+  END SUBROUTINE Diagn_EnableHP
+
+  SUBROUTINE Diagn_AccumulateHP( Dgn, Coll, Fact, OnlyPos, IsNewTS, RC, &
+                                 Array2D_SP, Array2D_HP, Array3D_SP, Array3D_HP, &
+                                 Array2D_DP, Array3D_DP )
+    TYPE(DiagnCont), POINTER :: Dgn
+    TYPE(DiagnCollection), POINTER :: Coll
+    REAL(hp), INTENT(IN) :: Fact
+    LOGICAL, INTENT(IN) :: OnlyPos, IsNewTS
+    INTEGER, INTENT(INOUT) :: RC
+    REAL(sp), OPTIONAL, INTENT(IN) :: Array2D_SP(:,:), Array3D_SP(:,:,:)
+    REAL(hp), OPTIONAL, INTENT(IN) :: Array2D_HP(:,:), Array3D_HP(:,:,:)
+    REAL(dp), OPTIONAL, INTENT(IN) :: Array2D_DP(:,:), Array3D_DP(:,:,:)
+    REAL(hp) :: V
+    INTEGER :: I, J, L, Lo, Hi
+    LOGICAL :: Reset
+    Reset = (Dgn%Counter == 0 .AND. Dgn%AvgFlag /= AvgFlagCumulSum) .OR. &
+            (Dgn%AvgFlag == AvgFlagInst .AND. IsNewTS)
+    IF ( Dgn%SpaceDim == 3 ) THEN
+       CALL HCO_ArrAssert(Dgn%Accum3D, Coll%NX, Coll%NY, Coll%NZ, RC)
+       IF ( RC /= HCO_SUCCESS ) RETURN
+       IF ( Reset ) Dgn%Accum3D%Val = 0.0_hp
+       DO L=1,Coll%NZ
+       DO J=1,Coll%NY
+       DO I=1,Coll%NX
+          IF ( PRESENT(Array3D_DP) ) THEN
+             V = Array3D_DP(I,J,L)
+          ELSEIF ( PRESENT(Array3D_HP) ) THEN
+             V = Array3D_HP(I,J,L)
+          ELSEIF ( PRESENT(Array3D_SP) ) THEN
+             V = REAL(Array3D_SP(I,J,L),hp)
+          ELSE
+             CALL HCO_ERROR('Missing 3D increment for precise diagnostics',RC)
+             RETURN
+          ENDIF
+          IF ( OnlyPos .AND. V < 0.0_hp ) CYCLE
+          Dgn%Accum3D%Val(I,J,L) = Dgn%Accum3D%Val(I,J,L) + V*Fact
+       ENDDO
+       ENDDO
+       ENDDO
+    ELSE
+       CALL HCO_ArrAssert(Dgn%Accum2D, Coll%NX, Coll%NY, RC)
+       IF ( RC /= HCO_SUCCESS ) RETURN
+       IF ( Reset ) Dgn%Accum2D%Val = 0.0_hp
+       DO J=1,Coll%NY
+       DO I=1,Coll%NX
+          V = 0.0_hp
+          IF ( PRESENT(Array2D_DP) ) THEN
+             V = Array2D_DP(I,J)
+             IF ( OnlyPos .AND. V < 0.0_hp ) CYCLE
+          ELSEIF ( PRESENT(Array2D_HP) ) THEN
+             V = Array2D_HP(I,J)
+             IF ( OnlyPos .AND. V < 0.0_hp ) CYCLE
+          ELSEIF ( PRESENT(Array2D_SP) ) THEN
+             V = REAL(Array2D_SP(I,J),hp)
+             IF ( OnlyPos .AND. V < 0.0_hp ) CYCLE
+          ELSEIF ( PRESENT(Array3D_DP) .OR. PRESENT(Array3D_HP) .OR. PRESENT(Array3D_SP) ) THEN
+             Lo = 1
+             Hi = Coll%NZ
+             IF ( Dgn%LevIdx /= -1 ) THEN
+                Lo = Dgn%LevIdx
+                Hi = Lo
+             ENDIF
+             DO L=Lo,Hi
+                IF ( PRESENT(Array3D_DP) ) THEN
+                   IF ( OnlyPos .AND. Array3D_DP(I,J,L) < 0.0_dp ) CYCLE
+                   V = V + Array3D_DP(I,J,L)
+                ELSEIF ( PRESENT(Array3D_HP) ) THEN
+                   IF ( OnlyPos .AND. Array3D_HP(I,J,L) < 0.0_hp ) CYCLE
+                   V = V + Array3D_HP(I,J,L)
+                ELSE
+                   IF ( OnlyPos .AND. Array3D_SP(I,J,L) < 0.0_sp ) CYCLE
+                   V = V + REAL(Array3D_SP(I,J,L),hp)
+                ENDIF
+             ENDDO
+          ELSE
+             CALL HCO_ERROR('Missing increment for precise diagnostics',RC)
+             RETURN
+          ENDIF
+          Dgn%Accum2D%Val(I,J) = Dgn%Accum2D%Val(I,J) + V*Fact
+       ENDDO
+       ENDDO
+    ENDIF
+  END SUBROUTINE Diagn_AccumulateHP
 !EOC
 !------------------------------------------------------------------------------
 !                   Harmonized Emissions Component (HEMCO)                    !
@@ -2035,7 +2149,13 @@ CONTAINS
           !----------------------------------------------------------------------
           ! To add 3D array
           !----------------------------------------------------------------------
-          IF ( ThisDiagn%SpaceDim == 3 ) THEN
+          IF ( ThisDiagn%AccumulateHP ) THEN
+             CALL Diagn_AccumulateHP(ThisDiagn,ThisColl,Fact,OnlyPos,IsNewTS,RC, &
+                  Array2D_SP=Array2D_SP,Array3D_SP=Array3D_SP, &
+                  Array2D_HP=Array2D_HP,Array3D_HP=Array3D_HP, &
+                  Array2D_DP=Array2D,Array3D_DP=Array3D)
+             IF ( RC /= HCO_SUCCESS ) RETURN
+          ELSEIF ( ThisDiagn%SpaceDim == 3 ) THEN
 
              ! Make sure dimensions agree and diagnostics array is allocated
              IF ( PRESENT(Array3D_SP) .OR. PRESENT(Array3D) .OR. PRESENT(Array3D_HP) ) THEN
@@ -2934,6 +3054,9 @@ CONTAINS
     DgnCont%NextCont => NULL()
     DgnCont%Arr2D    => NULL()
     DgnCont%Arr3D    => NULL()
+    DgnCont%Accum2D  => NULL()
+    DgnCont%Accum3D  => NULL()
+    DgnCont%AccumulateHP = .FALSE.
     DgnCont%DtaIsPtr = .FALSE.
     DgnCont%Scalar   =  0.0_sp
     DgnCont%Total    =  0.0_sp
@@ -3017,6 +3140,8 @@ CONTAINS
        ENDIF
        CALL HCO_ArrCleanup( DgnCont%Arr2D, DeepClean )
        CALL HCO_ArrCleanup( DgnCont%Arr3D, DeepClean )
+       CALL HCO_ArrCleanup( DgnCont%Accum2D, .TRUE. )
+       CALL HCO_ArrCleanup( DgnCont%Accum3D, .TRUE. )
        DgnCont%NextCont => NULL()
        DEALLOCATE ( DgnCont )
     ENDIF
@@ -3151,6 +3276,20 @@ CONTAINS
     ! AreaScal convert area to desired units, as determined during
     ! initialization of the diagnostics.
     !-----------------------------------------------------------------------
+
+    ! Snapshot the precise integral once; retain the integral for cumulative
+    ! diagnostics. Existing normalization and real32 output format follow.
+    IF ( DgnCont%AccumulateHP ) THEN
+       IF ( DgnCont%SpaceDim == 2 ) THEN
+          CALL HCO_ArrAssert(DgnCont%Arr2D, ThisColl%NX, ThisColl%NY, RC)
+          IF ( RC /= HCO_SUCCESS ) RETURN
+          DgnCont%Arr2D%Val = REAL(DgnCont%Accum2D%Val,sp)
+       ELSEIF ( DgnCont%SpaceDim == 3 ) THEN
+          CALL HCO_ArrAssert(DgnCont%Arr3D, ThisColl%NX, ThisColl%NY, ThisColl%NZ, RC)
+          IF ( RC /= HCO_SUCCESS ) RETURN
+          DgnCont%Arr3D%Val = REAL(DgnCont%Accum3D%Val,sp)
+       ENDIF
+    ENDIF
 
     ! If the averaging is forced to the sum:
     IF ( DgnCont%AvgFlag == AvgFlagSum .OR. DgnCont%AvgFlag == AvgFlagCumulSum ) THEN

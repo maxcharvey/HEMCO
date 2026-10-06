@@ -15,6 +15,8 @@ MODULE HCOX_FINN_PROFILE_MOD
   CHARACTER(LEN=31), SAVE :: Fallback = 'pbl'
   REAL(hp), ALLOCATABLE, SAVE :: Weights(:,:,:)
   INTEGER, ALLOCATABLE, SAVE :: Reason(:,:) ! 0 valid, 1 unavailable, 2 terrain
+  INTEGER, SAVE :: ProfileExtNr = -1
+  LOGICAL, SAVE :: PrecisionReady = .FALSE.
 CONTAINS
   SUBROUTINE FINN_Profile_Init( HcoState, ExtState, ExtNr, IDs, Names, RC )
     USE HCO_EXTLIST_MOD, ONLY: GetExtOpt
@@ -34,6 +36,8 @@ CONTAINS
     IF ( RC /= HCO_SUCCESS ) RETURN
     IF ( .NOT. Found ) ProfileEnabled = .FALSE.
     IF ( .NOT. ProfileEnabled ) RETURN
+    ProfileExtNr = ExtNr
+    PrecisionReady = .FALSE.
     CALL GetExtOpt(HcoState%Config, ExtNr, 'FINNv25_profile_fallback', &
                    OptValChar=Fallback, FOUND=Found, RC=RC)
     IF ( RC /= HCO_SUCCESS ) RETURN
@@ -69,10 +73,17 @@ CONTAINS
 
   SUBROUTINE FINN_Profile_Prepare( HcoState, RC )
     USE HCO_CALC_MOD, ONLY: HCO_EvalFld
+    USE HCO_DIAGN_MOD, ONLY: Diagn_EnableHP
     TYPE(HCO_State), POINTER :: HcoState
     INTEGER, INTENT(INOUT) :: RC
     REAL(hp), ALLOCATABLE :: Ref(:,:,:)
     INTEGER :: I, J, S, AS
+    IF ( .NOT. PrecisionReady ) THEN
+       ! All file-defined auto diagnostics now exist as well as report fields.
+       CALL Diagn_EnableHP(HcoState,ProfileExtNr,RC)
+       IF ( RC /= HCO_SUCCESS ) RETURN
+       PrecisionReady = .TRUE.
+    ENDIF
     ALLOCATE(Ref(HcoState%NX,HcoState%NY,HcoState%NZ), STAT=AS)
     IF ( AS /= 0 ) THEN
        CALL HCO_ERROR('Cannot allocate FINN auxiliary reference', RC)
@@ -204,6 +215,8 @@ CONTAINS
     IF ( ALLOCATED(Weights) ) DEALLOCATE(Weights)
     IF ( ALLOCATED(Reason) ) DEALLOCATE(Reason)
     ProfileEnabled=.FALSE.
+    ProfileExtNr=-1
+    PrecisionReady=.FALSE.
     Fallback='pbl'
   END SUBROUTINE FINN_Profile_Final
 END MODULE HCOX_FINN_PROFILE_MOD

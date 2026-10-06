@@ -475,6 +475,10 @@ MODULE HCO_TYPES_MOD
      REAL(sp)                    :: Scalar         ! 1D scalar
      TYPE(Arr2D_SP),     POINTER :: Arr2D          ! 2D array
      TYPE(Arr3D_SP),     POINTER :: Arr3D          ! 3D array
+     ! Opt-in high-precision accumulation; output arrays/API remain real32.
+     LOGICAL                     :: AccumulateHP = .FALSE.
+     TYPE(Arr2D_HP),     POINTER :: Accum2D => NULL()
+     TYPE(Arr3D_HP),     POINTER :: Accum3D => NULL()
      REAL(sp)                    :: Total          ! Diagnostics total
      LOGICAL                     :: DtaIsPtr       ! Is data just a pointer?
      INTEGER                     :: LevIdx         ! Level index to be used
