@@ -10,6 +10,7 @@ add_library(HCOX STATIC EXCLUDE_FROM_ALL
 	hcox_finn_mod.F90
 	hcox_finn_mod.FINNv16
 	hcox_finnv25_mod.F90
+	hcox_origin_source_kernel_mod.F90
 	hcox_gfas_mod.F90
 	hcox_gc_POPs_mod.F90
 	hcox_gc_RnPbBe_mod.F90
