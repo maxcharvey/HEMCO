@@ -140,6 +140,7 @@ CONTAINS
     USE HCOX_FIRE_INJECTION_MOD, ONLY : HCOX_FireInject_Apply
     USE HCO_STATE_MOD, ONLY : HCO_GetHcoID
     USE HCO_SCALE_MOD, ONLY : HCO_ScaleGet
+    USE HCOX_ORIGIN_SOURCE_KERNEL_MOD, ONLY: ORIGIN_SOURCE_ALLOCATE
 
     TYPE(Ext_State), POINTER         :: ExtState
     TYPE(HCO_State), POINTER         :: HcoState
@@ -147,12 +148,14 @@ CONTAINS
 
     CHARACTER(LEN=63)                :: FieldName
     CHARACTER(LEN=255)               :: MSG, LOC
-    INTEGER :: N, S, O, TagId
+    INTEGER :: N, S, O, TagId, I, J, L, AllocationStatus, WitnessI, WitnessJ
     REAL(hp), TARGET                 :: SpcArr(HcoState%NX,HcoState%NY)
     REAL(hp), TARGET :: TagArr(HcoState%NX,HcoState%NY)
     REAL(hp) :: Parts(HcoState%NX,HcoState%NY,3)
     REAL(hp) :: InjectedSum(HcoState%NX,HcoState%NY,HcoState%NZ)
-    REAL(hp) :: SourceErr, SourceScale
+    REAL(hp) :: CountrySource(HcoState%NX,HcoState%NY,HcoState%NZ,3)
+    REAL(hp) :: SourceErr, SourceScale, LocalError, MaxLocalError
+    REAL(hp) :: SourceChange(3), SourceChangeL1(3), RawProfile, Delta
 
     LOC = 'HCOX_FINNv25_Run (HCOX_FINNV25_MOD.F90)'
     IF ( ExtState%FINNv25 <= 0 ) RETURN
@@ -237,20 +240,64 @@ CONTAINS
           ELSE
              OriginFire(:,:,1,S)=SpcArr
           ENDIF
+          ! Allocate the actual unchanged selected parent injection. The raw
+          ! country fields supply source-specific relative geographic weights;
+          ! they never repair a transported origin state or alter UNT sources.
+          CountrySource=0.0_hp
+          MaxLocalError=0.0_hp
+          WitnessI=1;WitnessJ=1
+          SourceChange=0.0_hp;SourceChangeL1=0.0_hp
+          DO L=1,HcoState%NZ
+             DO J=1,HcoState%NY
+                DO I=1,HcoState%NX
+                   CALL ORIGIN_SOURCE_ALLOCATE(SpcArr(I,J),Parts(I,J,:), &
+                        OriginFire(I,J,L,S),CountrySource(I,J,L,:), &
+                        AllocationStatus,LocalError)
+                   IF (AllocationStatus/=0) THEN
+                      IF (HcoState%amIRoot) WRITE(6,*) &
+                           'BRC_ORIGIN_SOURCE_REFUSAL',TRIM(SpcNames(N)), &
+                           I,J,L,AllocationStatus,SpcArr(I,J),Parts(I,J,:),LocalError
+                      CALL HCO_ERROR('Unsupported or inconsistent FINNv25 origin source allocation',RC)
+                      RETURN
+                   ENDIF
+                   IF (LocalError>MaxLocalError) THEN
+                      MaxLocalError=LocalError;WitnessI=I;WitnessJ=J
+                   ENDIF
+                   ! This is a raw-source counterfactual under the actual
+                   ! parent profile, not a rerun of the old country injection.
+                   IF (SpcArr(I,J)>0.0_hp) THEN
+                      DO O=1,3
+                         RawProfile=OriginFire(I,J,L,S)*(Parts(I,J,O)/SpcArr(I,J))
+                         Delta=CountrySource(I,J,L,O)-RawProfile
+                         SourceChange(O)=SourceChange(O)+Delta
+                         SourceChangeL1(O)=SourceChangeL1(O)+ABS(Delta)
+                      ENDDO
+                   ENDIF
+                ENDDO
+             ENDDO
+          ENDDO
+          IF (HcoState%amIRoot) WRITE(6,'(a,1x,a,1x,es22.14)') &
+               'BRC_ORIGIN_RAW_LOCAL_RELATIVE',TRIM(SpcNames(N)),MaxLocalError
+          IF (HcoState%amIRoot) THEN
+             WRITE(6,*) 'BRC_ORIGIN_RAW_LOCAL_WITNESS',TRIM(SpcNames(N)), &
+                  WitnessI,WitnessJ,SpcArr(WitnessI,WitnessJ),Parts(WitnessI,WitnessJ,:)
+             WRITE(6,*) 'BRC_ORIGIN_ALLOCATED_SURFACE_WITNESS',TRIM(SpcNames(N)), &
+                  OriginFire(WitnessI,WitnessJ,1,S),CountrySource(WitnessI,WitnessJ,1,:)
+             WRITE(6,*) 'BRC_ORIGIN_SOURCE_CORRECTION_FLUXSUM',TRIM(SpcNames(N)), &
+                  SourceChange,SourceChangeL1
+          ENDIF
           DO O=1,3
-             TagArr=Parts(:,:,O)
              TagId=HCO_GetHcoID(TRIM(SpcNames(N))//'_'//OriginNames(O),HcoState)
              IF (HcoState%Options%ScaleEmis .AND. HCO_ScaleGet(TagId)/=1.0_hp) THEN
                 CALL HCO_ERROR('Origin prototype requires unit universal emission scales',RC)
                 RETURN
              ENDIF
              IF (VerticalInjectFrac>0.0_hp) THEN
-                CALL HCOX_FireInject_Apply(HcoState,ExtState,TagArr, &
-                     VerticalInjectFrac,VerticalInjectLevels,SpcArr3D,'FINNv25 origin',RC)
-                IF (RC/=HCO_SUCCESS) RETURN
+                SpcArr3D=CountrySource(:,:,:,O)
                 CALL HCO_EmisAdd(HcoState,SpcArr3D,TagId,RC,ExtNr=ExtNrSaved)
                 InjectedSum=InjectedSum+SpcArr3D
              ELSE
+                TagArr=CountrySource(:,:,1,O)
                 CALL HCO_EmisAdd(HcoState,TagArr,TagId,RC,ExtNr=ExtNrSaved)
                 InjectedSum(:,:,1)=InjectedSum(:,:,1)+TagArr
              ENDIF
