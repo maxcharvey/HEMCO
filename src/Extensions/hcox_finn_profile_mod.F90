@@ -3,7 +3,7 @@ MODULE HCOX_FINN_PROFILE_MOD
   USE HCO_ERROR_MOD
   USE HCO_STATE_MOD, ONLY: HCO_State
   USE HCOX_STATE_MOD, ONLY: Ext_State
-  USE HCOX_FINN_PROFILE_KERNEL_MOD, ONLY: FINN_Normalize, FINN_Allocate
+  USE HCOX_FINN_PROFILE_KERNEL_MOD, ONLY: FINN_Normalize, FINN_Allocate, FINN_Scale_Height
   USE HCOX_FIRE_INJECTION_MOD, ONLY: HCOX_FireInject_Profile
   USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_IS_FINITE
   IMPLICIT NONE
@@ -13,6 +13,7 @@ MODULE HCOX_FINN_PROFILE_MOD
   LOGICAL, SAVE :: ProfileEnabled = .FALSE.
   CHARACTER(LEN=31), PARAMETER :: MethodName = 'gfas_prepared'
   CHARACTER(LEN=31), SAVE :: Fallback = 'pbl'
+  REAL(hp), SAVE :: HeightScale = 1.0_hp
   REAL(hp), ALLOCATABLE, SAVE :: Weights(:,:,:)
   INTEGER, ALLOCATABLE, SAVE :: Reason(:,:) ! 0 valid, 1 unavailable, 2 terrain
   INTEGER, SAVE :: ProfileExtNr = -1
@@ -28,6 +29,7 @@ CONTAINS
     INTEGER, INTENT(INOUT) :: RC
     LOGICAL :: Found
     INTEGER :: N, M, AS
+    CHARACTER(LEN=120) :: ScaleMsg
     CHARACTER(LEN=20), PARAMETER :: Metrics(4) = [ CHARACTER(LEN=20) :: &
          'FINNProfileSource_', 'FINNProfileFallback_', &
          'FINNProfileTerrain_', 'FINNProfileAbovePBL_' ]
@@ -38,6 +40,19 @@ CONTAINS
     IF ( .NOT. ProfileEnabled ) RETURN
     ProfileExtNr = ExtNr
     PrecisionReady = .FALSE.
+    HeightScale = 1.0_hp
+    CALL GetExtOpt(HcoState%Config, ExtNr, 'FINNv25_GFAS_height_scale', &
+                   OptValHp=HeightScale, FOUND=Found, RC=RC)
+    IF ( RC /= HCO_SUCCESS ) RETURN
+    IF ( .NOT. Found ) HeightScale = 1.0_hp
+    IF ( .NOT. IEEE_IS_FINITE(HeightScale) ) THEN
+       CALL HCO_ERROR('FINN GFAS height scale must be finite and positive', RC)
+       RETURN
+    ENDIF
+    IF ( HeightScale <= 0.0_hp ) THEN
+       CALL HCO_ERROR('FINN GFAS height scale must be finite and positive', RC)
+       RETURN
+    ENDIF
     CALL GetExtOpt(HcoState%Config, ExtNr, 'FINNv25_profile_fallback', &
                    OptValChar=Fallback, FOUND=Found, RC=RC)
     IF ( RC /= HCO_SUCCESS ) RETURN
@@ -68,6 +83,8 @@ CONTAINS
     IF ( HcoState%amIRoot ) THEN
        CALL HCO_MSG('FINNv2.5 auxiliary profile: '//TRIM(MethodName), LUN=HcoState%Config%hcoLogLUN)
        CALL HCO_MSG('FINNv2.5 profile fallback: '//TRIM(Fallback), LUN=HcoState%Config%hcoLogLUN)
+       WRITE(ScaleMsg,'(A,F12.6)') 'FINNv2.5 GFAS profile height scale (AGL): ',HeightScale
+       CALL HCO_MSG(TRIM(ScaleMsg), LUN=HcoState%Config%hcoLogLUN)
     ENDIF
   END SUBROUTINE FINN_Profile_Init
 
@@ -77,7 +94,9 @@ CONTAINS
     TYPE(HCO_State), POINTER :: HcoState
     INTEGER, INTENT(INOUT) :: RC
     REAL(hp), ALLOCATABLE :: Ref(:,:,:)
+    REAL(hp) :: Scaled(HcoState%NZ), Overflow
     INTEGER :: I, J, S, AS
+    CHARACTER(LEN=180) :: ScaleMsg
     IF ( .NOT. PrecisionReady ) THEN
        ! All file-defined auto diagnostics now exist as well as report fields.
        CALL Diagn_EnableHP(HcoState,ProfileExtNr,RC)
@@ -88,6 +107,12 @@ CONTAINS
     IF ( AS /= 0 ) THEN
        CALL HCO_ERROR('Cannot allocate FINN auxiliary reference', RC)
        RETURN
+    ENDIF
+    IF ( HeightScale /= 1.0_hp ) THEN
+       IF ( .NOT. ASSOCIATED(HcoState%Grid%BXHEIGHT_M%Val) ) THEN
+          CALL HCO_ERROR('FINN GFAS height scaling requires model layer depths in metres', RC)
+          RETURN
+       ENDIF
     ENDIF
     Ref=0.0_hp
     CALL HCO_EvalFld(HcoState, 'FINNV25_GFAS_REFERENCE', Ref, RC)
@@ -101,6 +126,19 @@ CONTAINS
        ELSEIF ( S /= 0 ) THEN
           CALL HCO_ERROR('Invalid FINN GFAS reference: require finite nonnegative values', RC)
           RETURN
+       ENDIF
+       ! Empty GFAS columns retain their original support classification and
+       ! fallback. Identity leaves accepted weights bitwise unchanged.
+       IF ( S == 0 .AND. HeightScale /= 1.0_hp ) THEN
+          CALL FINN_Scale_Height(Weights(I,J,:), &
+               REAL(HcoState%Grid%BXHEIGHT_M%Val(I,J,:),hp),HeightScale,Scaled,Overflow,S)
+          IF ( S /= 0 ) THEN
+             WRITE(ScaleMsg,'(A,2I6,A,I2,A,ES12.4)') &
+                  'FINN GFAS height remap failed at ',I,J,': status=',S,', overflow fraction=',Overflow
+             CALL HCO_ERROR(TRIM(ScaleMsg), RC)
+             RETURN
+          ENDIF
+          Weights(I,J,:) = Scaled
        ENDIF
     ENDDO
     ENDDO
@@ -218,5 +256,6 @@ CONTAINS
     ProfileExtNr=-1
     PrecisionReady=.FALSE.
     Fallback='pbl'
+    HeightScale=1.0_hp
   END SUBROUTINE FINN_Profile_Final
 END MODULE HCOX_FINN_PROFILE_MOD
