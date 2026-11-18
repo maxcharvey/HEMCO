@@ -334,9 +334,16 @@ CONTAINS
        ! retain their main-branch GFED partitioning in the SELECT CASE below.
        IF ( .NOT. Inst%UseBrC ) THEN
           SELECT CASE ( Inst%SpcNames(N) )
-             CASE ( 'FSOAP', 'DBRCPOA', 'NPBRCPOA', 'PBRCPOA' )
+             CASE ( 'FSOAP', 'DBRCPOA', 'NPBRCPOA', 'PBRCPOA', 'FOCPI', 'FOCPO' )
                 CYCLE
           END SELECT
+       ENDIF
+
+       ! BrC modes replace residual OC with source-tagged FOC, never add it.
+       IF ( Inst%UseBrC ) THEN
+          IF ( Inst%SpcNames(N) == 'OCPI' .OR. Inst%SpcNames(N) == 'OCPO' ) CYCLE
+          ! Preserve ordinary SOAP only when no FSOAP replacement was requested.
+          IF ( Inst%SpcNames(N) == 'SOAP' .AND. Inst%FSOAPfrac > 0.0_sp ) CYCLE
        ENDIF
 
        ! SpcArr are the total biomass burning emissions for this
@@ -401,12 +408,12 @@ CONTAINS
        SpcArr = SpcArr * Inst%SpcScal(N)
 
        SELECT CASE ( Inst%SpcNames(N) )
-          CASE ( 'OCPI' )
+          CASE ( 'OCPI', 'FOCPI' )
              SpcArr = SpcArr * Inst%OCPIfrac
              IF ( Inst%UseBrC ) THEN
                 SpcArr = SpcArr * (1.0_sp - Inst%NPBRCPOAfrac)
              ENDIF
-          CASE ( 'OCPO' )
+          CASE ( 'OCPO', 'FOCPO' )
              SpcArr = SpcArr * (1.0_sp - Inst%OCPIfrac)
              IF ( Inst%UseBrC ) THEN
                 SpcArr = SpcArr * (1.0_sp - Inst%NPBRCPOAfrac)
@@ -883,6 +890,21 @@ CONTAINS
     Inst%SpcNames = SpcNames
     DEALLOCATE(HcoIDs,SpcNames)
 
+    IF ( Inst%UseBrC ) THEN
+       IF ( .NOT. ANY(Inst%SpcNames == 'FOCPI' .AND. Inst%HcoIDs > 0) .OR. &
+            .NOT. ANY(Inst%SpcNames == 'FOCPO' .AND. Inst%HcoIDs > 0) ) THEN
+          CALL HCO_ERROR( 'GFED BrC routing requires FOCPI/FOCPO extension species', RC )
+          RETURN
+       ENDIF
+       IF ( Inst%FSOAPfrac > 0.0_sp ) THEN
+          IF ( .NOT. ANY(Inst%SpcNames == 'FSOAP' .AND. Inst%HcoIDs > 0) ) THEN
+             CALL HCO_ERROR( 'GFED SOAP replacement requires active FSOAP extension species', RC )
+             RETURN
+          ENDIF
+       ENDIF
+    ENDIF
+
+
     ! Get species scale factors
     CALL GetExtSpcVal( HcoState%Config, Inst%ExtNr, Inst%nSpc, &
                        Inst%SpcNames, 'Scaling', 1.0_sp, SpcScal, RC )
@@ -905,6 +927,33 @@ CONTAINS
     Inst%SpcScal       = SpcScal
     Inst%SpcScalFldNme = SpcScalFldNme
     DEALLOCATE(SpcScal,SpcScalFldNme)
+
+    ! Residual fire tags replace OC, so inherit its inventory scaling and mask.
+    ! Reject independent conflicting tag options instead of silently changing mass.
+    IF ( Inst%UseBrC ) THEN
+       DO N = 1, Inst%nSpc
+          IF ( Inst%SpcNames(N) /= 'FOCPI' .AND. Inst%SpcNames(N) /= 'FOCPO' ) CYCLE
+          tmpName = Inst%SpcNames(N)(2:)
+          Matched = .FALSE.
+          DO M = 1, Inst%nSpc
+             IF ( Inst%SpcNames(M) /= tmpName ) CYCLE
+             Matched = .TRUE.
+             IF ( ( Inst%SpcScal(N) /= 1.0_sp .AND. &
+                    Inst%SpcScal(N) /= Inst%SpcScal(M) ) .OR. &
+                  ( Inst%SpcScalFldNme(N) /= HCOX_NOSCALE .AND. &
+                    Inst%SpcScalFldNme(N) /= Inst%SpcScalFldNme(M) ) ) THEN
+                CALL HCO_ERROR( 'GFED FOC scaling must inherit corresponding OC options', RC )
+                RETURN
+             ENDIF
+             Inst%SpcScal(N) = Inst%SpcScal(M)
+             Inst%SpcScalFldNme(N) = Inst%SpcScalFldNme(M)
+          ENDDO
+          IF ( .NOT. Matched ) THEN
+             CALL HCO_ERROR( 'GFED FOC routing requires corresponding legacy OC extension species', RC )
+             RETURN
+          ENDIF
+       ENDDO
+    ENDIF
 
     ! SOAP and FSOAP are specified as final emitted ratios to GFED CO.
     ! Inherit CO scaling once, before any source-species remapping, so NAP and
@@ -988,6 +1037,8 @@ CONTAINS
              SpcName = 'MOH'
           ENDIF
        ENDIF
+       IF ( TRIM(SpcName) == 'FOCPI' ) SpcName = 'OC'
+       IF ( TRIM(SpcName) == 'FOCPO' ) SpcName = 'OC'
        IF ( TRIM(SpcName) == 'POG1' ) SpcName = 'OC'
        IF ( TRIM(SpcName) == 'POG2' ) SpcName = 'OC'
        IF ( TRIM(SpcName) == 'NAP'  ) SpcName = 'CO'
