@@ -15,7 +15,7 @@ MODULE HCOX_FINN_PROFILE_MOD
   CHARACTER(LEN=31), SAVE :: Fallback = 'pbl'
   REAL(hp), SAVE :: HeightScale = 1.0_hp
   REAL(hp), ALLOCATABLE, SAVE :: Weights(:,:,:)
-  INTEGER, ALLOCATABLE, SAVE :: Reason(:,:) ! 0 valid, 1 unavailable, 2 terrain
+  INTEGER, ALLOCATABLE, SAVE :: Reason(:,:) ! 0 valid, 1 unavailable
   INTEGER, SAVE :: ProfileExtNr = -1
   LOGICAL, SAVE :: PrecisionReady = .FALSE.
 CONTAINS
@@ -29,7 +29,7 @@ CONTAINS
     INTEGER, INTENT(INOUT) :: RC
     LOGICAL :: Found
     INTEGER :: N, M, AS
-    CHARACTER(LEN=120) :: ScaleMsg
+    CHARACTER(LEN=120) :: ScaleMsg, Name, LongName
     CHARACTER(LEN=20), PARAMETER :: Metrics(4) = [ CHARACTER(LEN=20) :: &
          'FINNProfileSource_', 'FINNProfileFallback_', &
          'FINNProfileTerrain_', 'FINNProfileAbovePBL_' ]
@@ -74,9 +74,13 @@ CONTAINS
     DO N=1,SIZE(IDs)
        IF ( IDs(N) < 0 ) CYCLE
        DO M=1,SIZE(Metrics)
-          CALL Diagn_Create(HcoState=HcoState, cName=TRIM(Metrics(M))//TRIM(Names(N)), &
+          Name=TRIM(Metrics(M))//TRIM(Names(N))
+          LongName=Name
+          IF ( TRIM(Metrics(M)) == 'FINNProfileTerrain_' ) &
+             LongName=TRIM(Name)//' (inapplicable to prepared GFAS profiles)'
+          CALL Diagn_Create(HcoState=HcoState, cName=TRIM(Name), &
                ExtNr=ExtNr, Cat=-1, Hier=-1, HcoID=IDs(N), SpaceDim=2, &
-               OutUnit='kg/m2/s', AutoFill=0, RC=RC)
+               OutUnit='kg/m2/s', AutoFill=0, RC=RC, long_name=TRIM(LongName))
           IF ( RC /= HCO_SUCCESS ) RETURN
        ENDDO
     ENDDO
@@ -234,7 +238,6 @@ CONTAINS
                        AutoFill=0,Array2D=A,RC=RC)
     IF ( RC /= HCO_SUCCESS ) RETURN
     A=0.0_hp
-    WHERE (Reason==2) A=Column
     CALL Diagn_Update(HcoState,cName='FINNProfileTerrain_'//TRIM(Name), &
                        AutoFill=0,Array2D=A,RC=RC)
     IF ( RC /= HCO_SUCCESS ) RETURN

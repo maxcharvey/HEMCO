@@ -164,7 +164,7 @@ CONTAINS
           IF ( InputCont%Dct%Dta%ncRead .AND. &
                InputCont%Dct%Dta%UpdtFlag == HCO_UFLAG_ONCE ) THEN
              CALL HCO_ERROR('FINNv2.5 daily input uses read-once time flag: '// &
-                            TRIM(FieldName)//'; use RF for FINN or EFY for GFAS',RC)
+                            TRIM(FieldName)//'; use RF for FINN or RFY for prepared GFAS',RC)
              RETURN
           ENDIF
        ENDDO
